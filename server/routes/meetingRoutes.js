@@ -305,6 +305,30 @@ router.get("/locked-zones", authMiddleware, async (req, res) => {
     }
 });
 
+import Notification from "../models/Notification.js";
+
+router.get("/notifications", authMiddleware, async (req, res) => {
+    try {
+        const userId = req.userData.userId;
+        const notifications = await Notification.find({ user: userId }).sort({ createdAt: -1 });
+        return res.json({ notifications });
+    } catch (error) {
+        console.error("Fetch notifications error:", error);
+        return res.status(500).json({ error: "Failed to fetch notifications" });
+    }
+});
+
+router.post("/notifications/mark-seen", authMiddleware, async (req, res) => {
+    try {
+        const userId = req.userData.userId;
+        await Notification.updateMany({ user: userId, seen: false }, { $set: { seen: true } });
+        return res.json({ success: true });
+    } catch (error) {
+        console.error("Mark notifications seen error:", error);
+        return res.status(500).json({ error: "Failed to mark notifications unseen" });
+    }
+});
+
 router.post("/schedule", authMiddleware, async (req, res) => {
     try {
         const { roomName, startTime, endTime, participantIds } = req.body;
@@ -314,30 +338,55 @@ router.post("/schedule", authMiddleware, async (req, res) => {
             return res.status(400).json({ error: "Missing required fields" });
         }
 
+        const start = new Date(startTime);
+        const end = new Date(endTime);
+
+        if (start < new Date(Date.now() - 5 * 60 * 1000)) {
+            return res.status(400).json({ error: "Cannot schedule meetings in the past" });
+        }
+        if (end <= start) {
+            return res.status(400).json({ error: "End time must be after start time" });
+        }
+        if (end - start > 60 * 60 * 1000) {
+            return res.status(400).json({ error: "Meeting duration cannot exceed 1 hour" });
+        }
+
         const scheduledMeeting = new ScheduledMeeting({
             leader: leaderId,
             roomName: roomName,
-            startTime: new Date(startTime),
-            endTime: new Date(endTime),
+            startTime: start,
+            endTime: end,
             participants: participantIds,
             status: 'Scheduled'
         });
 
         await scheduledMeeting.save();
 
+        // Create Notifications for all participants
+        const leaderUser = await User.findById(leaderId);
+        const leaderUsername = leaderUser ? leaderUser.username : "Team Leader";
+        const message = `${leaderUsername} scheduled a meeting in ${roomName.replace('meta-', '').split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')}`;
+        
+        const notifications = participantIds.map(participantId => ({
+            user: participantId,
+            message: message,
+            type: 'meeting_invite',
+            relatedId: scheduledMeeting._id,
+        }));
+        
+        if (notifications.length > 0) {
+            await Notification.insertMany(notifications);
+        }
+
         // Optional: Emit real-time socket events for UI notification
         const io = req.app.get("io");
         if (io) {
-            const leaderUser = await User.findById(leaderId);
-            const leaderUsername = leaderUser ? leaderUser.username : "Team Leader";
-
-            // Note: Since sockets are linked to user instances via mapping (outside of standard req),
-            // we broadcast the invite so the clients can filter and alert if they are in the participantIds
             io.emit("meeting_invite", {
                 roomName,
                 startTime,
                 leaderUsername,
-                participantIds
+                participantIds,
+                meeting: scheduledMeeting
             });
         }
 

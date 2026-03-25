@@ -5,7 +5,7 @@ import { X, User, CreditCard, Users, Building, FileText, Bell, Settings, Mail, L
 import { motion, AnimatePresence } from "framer-motion";
 import ReactMarkdown from "react-markdown";
 
-export default function UserSettingsModal({ isOpen, onClose }) {
+export default function UserSettingsModal({ isOpen, onClose, onNotificationsViewed, unseenCount = 0 }) {
     const { user, token, setUser } = useAuth();
     const [activeTab, setActiveTab] = useState("account");
 
@@ -14,6 +14,10 @@ export default function UserSettingsModal({ isOpen, onClose }) {
     const [loadingHistory, setLoadingHistory] = useState(false);
     const [viewMomContent, setViewMomContent] = useState(null);
     const [viewTranscriptContent, setViewTranscriptContent] = useState(null);
+
+    // Notifications State
+    const [upcomingMeetings, setUpcomingMeetings] = useState([]);
+    const [loadingUpcoming, setLoadingUpcoming] = useState(false);
 
     // Account State
     const [firstName, setFirstName] = useState("");
@@ -30,6 +34,7 @@ export default function UserSettingsModal({ isOpen, onClose }) {
 
     const [error, setError] = useState("");
     const [message, setMessage] = useState("");
+    const [success, setSuccess] = useState(false);
     const [loading, setLoading] = useState(false);
     const fileInputRef = useRef(null);
 
@@ -48,6 +53,7 @@ export default function UserSettingsModal({ isOpen, onClose }) {
             setSelectedFile(null);
             setMessage("");
             setError("");
+            setSuccess(false); // Reset success state
             setCurrentPassword("");
             setNewPassword("");
         }
@@ -79,13 +85,39 @@ export default function UserSettingsModal({ isOpen, onClose }) {
             interval = setInterval(() => {
                 fetchHistory(); // Poll every 5s for MOM status updates
             }, 5000);
+        } else if (activeTab === 'notifications' && isOpen) {
+            const fetchNotifications = async () => {
+                try {
+                    const res = await axios.get(`${serverUrl}/api/meeting/notifications`, {
+                        headers: { Authorization: `Bearer ${token}` }
+                    });
+                    setUpcomingMeetings(res.data.notifications || []);
+                    
+                    // If there are unseen notifications, mark them seen
+                    const hasUnseen = res.data.notifications.some(n => !n.seen);
+                    if (hasUnseen) {
+                        await axios.post(`${serverUrl}/api/meeting/notifications/mark-seen`, {}, {
+                            headers: { Authorization: `Bearer ${token}` }
+                        });
+                        if (onNotificationsViewed) onNotificationsViewed();
+                    }
+                } catch (e) {
+                    console.error("Failed to load notifications:", e);
+                } finally {
+                    setLoadingUpcoming(false);
+                }
+            };
+            setLoadingUpcoming(true);
+            fetchNotifications();
+
+            // Just fetch once when tab is opened, no need to over-poll in settings since it's history
         }
         return () => {
             if (interval) clearInterval(interval);
             setViewMomContent(null);
             setViewTranscriptContent(null);
         };
-    }, [activeTab, serverUrl, token, isOpen]);
+    }, [activeTab, serverUrl, token, isOpen, onNotificationsViewed]);
 
     const handleGenerateMOM = async (recordId) => {
         try {
@@ -122,6 +154,7 @@ export default function UserSettingsModal({ isOpen, onClose }) {
         e.preventDefault();
         setError("");
         setMessage("");
+        setSuccess(false); // Reset success state
         setLoading(true);
 
         try {
@@ -154,6 +187,7 @@ export default function UserSettingsModal({ isOpen, onClose }) {
             localStorage.setItem("user", JSON.stringify(updatedUser)); // Persist update
 
             setMessage("Profile updated successfully!");
+            setSuccess(true); // Set success state
 
             if (response.data.user.avatar) {
                 setCurrentAvatarUrl(response.data.user.avatar);
@@ -193,13 +227,20 @@ export default function UserSettingsModal({ isOpen, onClose }) {
             <button
                 key={item.id}
                 onClick={() => setActiveTab(item.id)}
-                className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${isActive
+                className={`w-full flex items-center justify-between px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${isActive
                     ? 'bg-[#e7f5f0] text-[#136c50] shadow-sm'
                     : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
                     }`}
             >
-                <Icon size={18} className={isActive ? "text-[#136c50]" : "text-gray-400"} />
-                {item.label}
+                <div className="flex items-center gap-3">
+                    <Icon size={18} className={isActive ? "text-[#136c50]" : "text-gray-400"} />
+                    {item.label}
+                </div>
+                {item.id === 'notifications' && unseenCount > 0 && (
+                    <span className="flex h-5 w-5 items-center justify-center rounded-full bg-red-500 text-[10px] font-bold text-white">
+                        {unseenCount}
+                    </span>
+                )}
             </button>
         );
     };
@@ -595,6 +636,48 @@ export default function UserSettingsModal({ isOpen, onClose }) {
                                                     </div>
                                                 </div>
                                             )}
+                                        </div>
+                                    ) : activeTab === 'notifications' ? (
+                                        <div className="mb-8">
+                                            <h2 className="text-[16px] font-bold text-gray-900 mb-1">Notifications</h2>
+                                            <p className="text-[13px] text-gray-500">View your upcoming meeting invitations and alerts.</p>
+
+                                            <div className="mt-8 space-y-4">
+                                                {loadingUpcoming ? (
+                                                    <div className="text-sm text-gray-500">Loading notifications...</div>
+                                                ) : upcomingMeetings.length === 0 ? (
+                                                    <div className="text-sm text-gray-500 p-6 border border-gray-100 rounded-xl bg-gray-50 text-center">No upcoming meetings or invites.</div>
+                                                ) : (
+                                                    upcomingMeetings.map(notification => (
+                                                        <div key={notification._id} className={`p-4 border ${notification.seen ? 'border-gray-200 bg-white' : 'border-blue-200 bg-blue-50/50'} rounded-xl shadow-[0_1px_2px_rgba(0,0,0,0.02)] flex flex-col gap-4 transition-colors`}>
+                                                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                                                                <div className="flex items-start gap-4">
+                                                                    <div className={`w-10 h-10 rounded-full ${notification.seen ? 'bg-gray-100' : 'bg-blue-100'} flex items-center justify-center flex-shrink-0 mt-1 sm:mt-0`}>
+                                                                        <Bell size={18} className={notification.seen ? 'text-gray-500' : 'text-blue-600'} />
+                                                                    </div>
+                                                                    <div>
+                                                                        <h4 className={`text-sm ${notification.seen ? 'font-medium text-gray-800' : 'font-bold text-gray-900'} leading-snug`}>
+                                                                            {notification.message}
+                                                                        </h4>
+                                                                        <div className="flex items-center gap-4 mt-2 text-xs text-gray-500 font-medium">
+                                                                            <div className="flex items-center gap-1.5">
+                                                                                <Calendar size={13} className="text-gray-400" />
+                                                                                {new Date(notification.createdAt).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })} • {new Date(notification.createdAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}
+                                                                            </div>
+                                                                        </div>
+                                                                    </div>
+                                                                </div>
+                                                                {!notification.seen && (
+                                                                    <div className="flex items-center gap-2 shrink-0">
+                                                                        <span className="w-2 h-2 rounded-full bg-blue-500"></span>
+                                                                        <span className="text-[12px] font-bold text-blue-600">New</span>
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                    ))
+                                                )}
+                                            </div>
                                         </div>
                                     ) : (
                                         <div className="flex items-center justify-center h-[50vh] text-gray-400 flex-col">

@@ -7,7 +7,7 @@ const ScheduleModal = ({ zone, onClose, onSuccess }) => {
     const { token } = useAuth();
     const [users, setUsers] = useState([]);
     const [startTime, setStartTime] = useState('');
-    const [endTime, setEndTime] = useState('');
+    const [duration, setDuration] = useState('30');
     const [selectedParticipants, setSelectedParticipants] = useState([]);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);
@@ -39,17 +39,26 @@ const ScheduleModal = ({ zone, onClose, onSuccess }) => {
         setLoading(true);
         setError(null);
 
-        if (!startTime || !endTime) {
-            setError("Start time and end time are required.");
+        if (!startTime) {
+            setError("Start time is required.");
             setLoading(false);
             return;
         }
 
+        const start = new Date(startTime);
+        if (start < new Date(Date.now() - 5 * 60 * 1000)) {
+            setError("Start time cannot be in the past.");
+            setLoading(false);
+            return;
+        }
+
+        const end = new Date(start.getTime() + parseInt(duration) * 60000);
+
         try {
             await axios.post(`${serverUrl}/api/meeting/schedule`, {
                 roomName: zone.zoneId,
-                startTime: new Date(startTime).toISOString(),
-                endTime: new Date(endTime).toISOString(),
+                startTime: start.toISOString(),
+                endTime: end.toISOString(),
                 participantIds: selectedParticipants
             }, {
                 headers: { Authorization: `Bearer ${token}` }
@@ -82,9 +91,14 @@ const ScheduleModal = ({ zone, onClose, onSuccess }) => {
                                 className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-cyan-500" required />
                         </div>
                         <div className="flex-1">
-                            <label className="block text-sm text-gray-400 mb-1">End Time</label>
-                            <input type="datetime-local" value={endTime} onChange={(e) => setEndTime(e.target.value)}
-                                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-cyan-500" required />
+                            <label className="block text-sm text-gray-400 mb-1">Duration</label>
+                            <select value={duration} onChange={(e) => setDuration(e.target.value)}
+                                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-cyan-500" required>
+                                <option value="15">15 Minutes</option>
+                                <option value="30">30 Minutes</option>
+                                <option value="45">45 Minutes</option>
+                                <option value="60">1 Hour</option>
+                            </select>
                         </div>
                     </div>
 

@@ -3,6 +3,7 @@ import { io } from "socket.io-client";
 
 const SOCKET_URL = import.meta.env.VITE_SOCKET_SERVER_URL;
 let socket = null;
+let globalPlayers = {};
 
 const socketService = {
   connect() {
@@ -14,9 +15,24 @@ const socketService = {
     socket.on("connect", () =>
       console.log("✅ Socket connected with ID:", socket.id)
     );
-    socket.on("disconnect", () =>
-      console.log("❌ Socket disconnected.")
-    );
+    socket.on("disconnect", () => {
+      console.log("❌ Socket disconnected.");
+      globalPlayers = {};
+    });
+
+    socket.on("players", (players) => {
+        globalPlayers = { ...players };
+    });
+    socket.on("playerJoined", (player) => {
+        globalPlayers[player.id] = player;
+    });
+    socket.on("playerLeft", (id) => {
+        delete globalPlayers[id];
+    });
+  },
+
+  getGlobalPlayers() {
+      return globalPlayers;
   },
 
   // Generic event listener

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useChat } from '../context/ChatContext'
 import { useAuth } from '../context/AuthContext'
@@ -9,16 +9,53 @@ import UserSettingsModal from './UserSettingsModal'
 import AdminPanel from './AdminPanel'
 import CalendarModal from './CalendarModal'
 import CalendarReminders from './CalendarReminders'
+import axios from 'axios'
+import socketService from '../services/socketService'
 
 export default function Sidebar() {
   const { chatClient, channel, isConnecting, unreadCounts, markAsRead } = useChat()
-  const { logout, user } = useAuth()
+  const { logout, user, token } = useAuth()
   const location = useLocation()
   const navigate = useNavigate()
 
   const [activePanel, setActivePanel] = useState(null)
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
   const [isAdminOpen, setIsAdminOpen] = useState(false)
+  const [unseenCount, setUnseenCount] = useState(0)
+
+  const serverUrl = import.meta.env.VITE_SOCKET_SERVER_URL;
+
+  // Fetch initial notifications for unseen count
+  useEffect(() => {
+      const fetchUnseen = async () => {
+          if (!token || !user) return;
+          try {
+              const res = await axios.get(`${serverUrl}/api/meeting/notifications`, {
+                  headers: { Authorization: `Bearer ${token}` }
+              });
+              const unread = res.data.notifications.filter(n => !n.seen).length;
+              setUnseenCount(unread);
+          } catch (e) {
+              console.error("Failed to fetch initial notifications", e);
+          }
+      };
+      fetchUnseen();
+
+      // Listen for incoming invites to increment
+      const onNewInvite = (data) => {
+          if (data.participantIds && data.participantIds.includes(user._id || user.userId)) {
+              setUnseenCount(prev => prev + 1);
+          }
+      };
+      
+      const socket = socketService.socket;
+      if (socket) {
+          socket.on("meeting_invite", onNewInvite);
+      }
+      return () => {
+          if (socket) socket.off("meeting_invite", onNewInvite);
+      };
+  }, [token, user, serverUrl]);
 
   const isCalendarOpen = location.pathname === '/calendar'
 
@@ -96,6 +133,7 @@ export default function Sidebar() {
               <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
               <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
             </svg>
+            {unseenCount > 0 && <Badge count={unseenCount} />}
           </RoundedIconButton>
 
           {/* ADMIN — Only visible to admins */}
@@ -144,6 +182,8 @@ export default function Sidebar() {
       <UserSettingsModal
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
+        onNotificationsViewed={() => setUnseenCount(0)}
+        unseenCount={unseenCount}
       />
 
       {/* Calendar Modal */}

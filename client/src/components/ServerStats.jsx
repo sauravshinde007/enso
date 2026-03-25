@@ -40,6 +40,9 @@ export default function ServerStats() {
 
     // 2. Track Online Users via Socket
     useEffect(() => {
+        // Initialize immediately to catch any players that joined before mount
+        setOnlineUsers(socketService.getGlobalPlayers() || {});
+
         const onPlayers = (players) => {
             setOnlineUsers(players);
         };
