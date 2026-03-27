@@ -215,18 +215,16 @@ router.post("/transcribe", authMiddleware, upload.single('audioFile'), async (re
             fs.mkdirSync(meetingsDir, { recursive: true });
         }
 
-        // We store an appended webm file PER USER per session. 
-        // This naturally merges the continuous WebM chunks into a single valid file stream.
+        // We store fully standalone WebM files every 30 seconds to avoid corrupted Matroska headers
         const safeUsername = username.replace(/[^a-z0-9]/gi, '_').toLowerCase();
-        const targetPath = path.join(meetingsDir, `${sessionId}_${safeUsername}.webm`);
+        const targetPath = path.join(meetingsDir, `${sessionId}__${safeUsername}__${Date.now()}.webm`);
 
-        const chunkData = fs.readFileSync(req.file.path);
-        fs.appendFileSync(targetPath, chunkData);
+        fs.copyFileSync(req.file.path, targetPath);
 
         // Delete the multer temp file
         if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
 
-        return res.json({ success: true, message: "Audio chunk stored." });
+        return res.json({ success: true, message: "Audio file saved." });
     } catch (e) {
         console.error("Audio chunk append error:", e);
         if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);

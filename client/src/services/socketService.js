@@ -7,7 +7,7 @@ let globalPlayers = {};
 
 const socketService = {
   connect() {
-    if (socket && socket.connected) return;
+    if (socket) return;
 
     console.log("🔌 Connecting to socket server.");
     socket = io(SOCKET_URL);

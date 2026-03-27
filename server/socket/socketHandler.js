@@ -89,11 +89,13 @@ export default (io) => {
           roomAccess: ROOM_ACCESS_LEVELS
         });
 
-        // Announce to others
-        socket.broadcast.emit("playerJoined", {
-          id: socket.id,
-          ...players[socket.id],
-        });
+        if (!existingPlayer) {
+          // Announce to others only if they weren't already in the game
+          socket.broadcast.emit("playerJoined", {
+            id: socket.id,
+            ...players[socket.id],
+          });
+        }
       } catch (error) {
         console.error("Error during joinGame:", error);
       }

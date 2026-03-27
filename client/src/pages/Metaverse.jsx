@@ -17,6 +17,7 @@ import ZoomControls from "../components/ZoomControls"; // Import
 import Minimap from "../components/Minimap"; // Import
 import MeetingModal from "../components/MeetingModal"; // Import meeting modal
 import FPSCounter from "../components/FPSCounter"; // Import FPS Counter
+import { NotificationDisplay } from "../context/NotificationContext"; // Import Notifications
 
 function Metaverse() {
     const { user } = useAuth();
@@ -45,6 +46,7 @@ function Metaverse() {
     return (
         <ChatProvider>
             <div className="app-root">
+                <NotificationDisplay />
                 <div id="game-container" className="game-container" />
 
                 {/* Local Video handled by Phaser now */}

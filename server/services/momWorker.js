@@ -9,6 +9,10 @@ import dotenv from 'dotenv';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import ffmpeg from 'fluent-ffmpeg';
+import ffmpegInstaller from '@ffmpeg-installer/ffmpeg';
+
+ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
 dotenv.config();
 
@@ -49,36 +53,76 @@ export const momWorker = new Worker('momQueue', async job => {
         if (sessionId) {
             const meetingsDir = path.join(os.tmpdir(), "metaverse_meetings");
 
-            // Look for unbroken raw uploaded WebM streams inside the tmp directory (per user)
+            // Look for individual uploaded WebM chunks inside the tmp directory (per user)
             if (fs.existsSync(meetingsDir)) {
-                const files = fs.readdirSync(meetingsDir).filter(f => f.startsWith(`${sessionId}_`));
+                const files = fs.readdirSync(meetingsDir)
+                                .filter(f => f.startsWith(`${sessionId}__`))
+                                .sort(); // Sorts chronologically thanks to Date.now() in filename
+
+                let previousWhisperContext = "Meeting, discussion, work, collaboration.";
+                
                 for (const file of files) {
                     const fullPath = path.join(meetingsDir, file);
-                    // Extract username from "sessionId_username.webm"
-                    const usernameExt = file.replace(`${sessionId}_`, '');
-                    const parsedUsername = usernameExt.replace('.webm', '');
+                    // Extract username from "sessionId__username__timestamp.webm"
+                    const parts = file.split('__');
+                    const parsedUsername = parts.length >= 2 ? parts[1] : "Unknown";
+                    const wavPath = fullPath.replace('.webm', '.wav');
 
                     try {
-                        const stream = fs.createReadStream(fullPath);
+                        // Convert to WAV 16kHz Mono
+                        await new Promise((resolve, reject) => {
+                            ffmpeg(fullPath)
+                                .audioFrequency(16000)
+                                .audioChannels(1)
+                                .format('wav')
+                                .on('end', resolve)
+                                .on('error', reject)
+                                .save(wavPath);
+                        });
+
+                        const stream = fs.createReadStream(wavPath);
                         const transcription = await groq.audio.transcriptions.create({
                             file: stream,
                             model: "whisper-large-v3",
-                            prompt: "This is a real-time conversation from a metaverse meeting. Please transcribe the speech accurately. Focus only on the spoken words. Please ignore background noise, and do not include repetitive words or any meta-commentary.",
-                            temperature: 0.1,
-                            language: "en",
+                            prompt: previousWhisperContext,
+                            temperature: 0.2,
+                            language: "en"
                         });
 
                         let text = transcription.text.trim();
 
-                        // Ignore WebM silence hallucinations
-                        const hallucinations = ["Thank you.", "Thank you", "Thank you...", ".", "...", "you", "You.", "You", "you.", "Bye.", "Bye", "[Silence]", "[BLANK_AUDIO]"];
-                        if (hallucinations.includes(text)) text = "";
+                        // Aggressively filter out Whisper silence hallucinations and dataset artifacts
+                        const artifacts = [
+                            "Thank you for watching", "Thanks for watching", "Thank you.", "Thank you",
+                            "Transcription by", "Translation by", "Amara.org", "Analog speech",
+                            "Please do not use the speech", "Please ignore background noise",
+                            "[Silence]", "[BLANK_AUDIO]", "Subscribe to", "Please subscribe",
+                            "Meeting, discussion, work, collaboration."
+                        ];
 
+                        // Remove artifact loops
+                        artifacts.forEach(artifact => {
+                            const regex = new RegExp(artifact, "gi");
+                            text = text.replace(regex, "");
+                        });
+
+                        // Clean up hanging non-word chunks often left behind by hallucination trimming
+                        text = text.replace(/^[.\-\s]+|[.\-\s]+$/g, "").trim();
+
+                        // Only append if there's meaningful text left
                         if (text && text.length > 3) {
                             transcriptText += `\n${parsedUsername}: ${text}`;
+                            
+                            // Capture rolling window 30 words context
+                            const words = text.split(/\s+/);
+                            const lastWords = words.slice(-30).join(' ');
+                            previousWhisperContext = lastWords || "Meeting, discussion, work, collaboration.";
                         }
                     } catch (e) {
                         console.error(`Failed to completely transcribe file ${file}:`, e);
+                    } finally {
+                        // Cleanup
+                        if (fs.existsSync(wavPath)) fs.unlinkSync(wavPath);
                     }
                 }
             }

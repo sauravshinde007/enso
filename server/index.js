@@ -26,7 +26,14 @@ import meetingRoutes from "./routes/meetingRoutes.js";
 import "./services/momWorker.js"; // Initialize MOM Worker
 
 const app = express();
-app.use(cors());
+const corsOptions = {
+  origin: function (origin, callback) {
+    if (!origin) return callback(null, true);
+    callback(null, true); // Allow all origins for dev
+  },
+  credentials: true,
+};
+app.use(cors(corsOptions));
 app.use(express.json());
 
 // Initialize Passport
