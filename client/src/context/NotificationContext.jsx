@@ -33,18 +33,23 @@ export const NotificationProvider = ({ children }) => {
     }, []);
 
     return (
-        <NotificationContext.Provider value={{ addNotification, removeNotification }}>
+        <NotificationContext.Provider value={{ addNotification, removeNotification, notifications }}>
             {children}
-
-            {/* Container fixed to top-right */}
-            <div className="fixed top-4 right-4 z-[9999] flex flex-col gap-3 pointer-events-none">
-                <AnimatePresence mode='popLayout'>
-                    {notifications.map((notif) => (
-                        <NotificationItem key={notif.id} {...notif} onClose={() => removeNotification(notif.id)} />
-                    ))}
-                </AnimatePresence>
-            </div>
         </NotificationContext.Provider>
+    );
+};
+
+export const NotificationDisplay = () => {
+    const { notifications, removeNotification } = useNotification();
+    
+    return (
+        <div className="fixed top-4 right-4 z-[9999] flex flex-col gap-3 pointer-events-none">
+            <AnimatePresence mode='popLayout'>
+                {notifications.map((notif) => (
+                    <NotificationItem key={notif.id} {...notif} onClose={() => removeNotification(notif.id)} />
+                ))}
+            </AnimatePresence>
+        </div>
     );
 };
 

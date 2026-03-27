@@ -165,8 +165,17 @@ class PeerService {
    * @param {string} remoteUserId - The socket ID of the user to call
    */
   callPeer(remoteUserId) {
-    if (!this.peer || !this.localStream) {
-      console.error('Peer or local stream not initialized');
+    if (!this.peer || this.peer.disconnected) {
+      console.log('PeerJS server not connected, cannot call.');
+      return;
+    }
+
+    // In Metaverse games, we might want to initiate connections even if *we* don't have mic/video, 
+    // so we can still RECEIVE audio from other people (listen-only mode). 
+    // Usually Peer.js allows `.call(id, stream)` with a blank stream or no stream but it behaves weirdly.
+    // If we have no localStream, we will not call. 
+    if (!this.localStream) {
+      console.warn('Local stream not initialized. Cannot send audio/video to peer.');
       return;
     }
 

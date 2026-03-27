@@ -12,6 +12,10 @@ export default class VoiceManager {
         this.isProximityMode = false;
         this.localVideoEnabled = false;
 
+        // Cache canvas rect to prevent severe 60FPS layout thrashing!
+        this.canvasRect = null;
+        this.lastCanvasRectUpdate = 0;
+
         // We rely on socket events triggering methods here via NetworkManager
     }
 
@@ -106,23 +110,20 @@ export default class VoiceManager {
 
         // Raycast for Line of Sight (LOS) - Block audio if wall/obstacle is in between
         if (this.scene.raycasterPlugin && volume > 0) {
-            // Need to create a new ray or reuse one. Creating one is safer for simple logic.
-            // Ideally store a re-usable ray in constructor but this is fine for now.
-            const ray = this.scene.raycasterPlugin.createRay({
-                origin: { x: myPlayer.x, y: myPlayer.y }
-            });
+            // Use a cached ray to avoid creating new ray objects 60 times a second
+            if (!this.audioRay) {
+                this.audioRay = this.scene.raycasterPlugin.createRay();
+            }
 
-            ray.setAngle(Phaser.Math.Angle.Between(myPlayer.x, myPlayer.y, otherPlayer.x, otherPlayer.y));
-            ray.setRayRange(distance); // Only check up to the target
+            this.audioRay.setOrigin(myPlayer.x, myPlayer.y);
+            this.audioRay.setAngle(Phaser.Math.Angle.Between(myPlayer.x, myPlayer.y, otherPlayer.x, otherPlayer.y));
+            this.audioRay.setRayRange(distance); // Only check up to the target
 
             // ray.cast() returns intersection object {x,y,object} or null/false
-            // checking simple intersection against mapped objects (walls)
-            const intersection = ray.cast();
+            const intersection = this.audioRay.cast();
 
             if (intersection) {
                 // Obstacle detected between players
-                // Muffle sound heavily or mute
-                // console.log(`🧱 Wall blocked audio from ${peerId}`);
                 volume = 0;
             }
         }
@@ -164,7 +165,7 @@ export default class VoiceManager {
 
         Object.assign(vid.style, {
             position: 'absolute',
-            width: '80px', height: '60px',
+            width: '60px', height: '60px',
             objectFit: 'cover',
             borderRadius: '8px',
             border: '2px solid #9b99fe',
@@ -199,24 +200,33 @@ export default class VoiceManager {
         if (this.myVideoElement && player) {
             const vid = this.myVideoElement;
 
-            // Calculate screen position
-            const canvas = this.scene.game.canvas;
-            const rect = canvas.getBoundingClientRect();
+            // Read bounding rect efficiently (throttle the expensive DOM read!)
+            const now = Date.now();
+            if (!this.canvasRect || now - this.lastCanvasRectUpdate > 1000) {
+                this.canvasRect = this.scene.game.canvas.getBoundingClientRect();
+                this.lastCanvasRectUpdate = now;
+            }
+
+            const rect = this.canvasRect;
             const zoom = camera.zoom;
 
             const screenX = (player.x - camera.worldView.x) * zoom;
             const screenY = (player.y - camera.worldView.y) * zoom;
 
-            const baseW = 80; const baseH = 60; const baseVOffset = 50;
+            const baseW = 60; const baseH = 60; const baseVOffset = 50;
 
             const curW = baseW * zoom;
             const curH = baseH * zoom;
             const curOffset = baseVOffset * zoom;
 
+            // GPU Accelerated Transform (No Layout Thrashing)
             vid.style.width = `${curW}px`;
             vid.style.height = `${curH}px`;
-            vid.style.left = `${rect.left + screenX - (curW / 2)}px`;
-            vid.style.top = `${rect.top + screenY - curH - curOffset}px`;
+            const tx = rect.left + screenX - (curW / 2);
+            const ty = rect.top + screenY - curH - curOffset;
+            vid.style.transform = `translate3d(${Math.round(tx)}px, ${Math.round(ty)}px, 0)`;
+            vid.style.left = '0px'; // Reset left/top
+            vid.style.top = '0px';
 
             // Hide if off-screen
             if (

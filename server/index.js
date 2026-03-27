@@ -23,9 +23,17 @@ import configurePassport from './config/passport.js';
 import User from './models/User.js'; // Import statically
 import { syncUsersBatch } from "./services/streamService.js";
 import meetingRoutes from "./routes/meetingRoutes.js";
+import "./services/momWorker.js"; // Initialize MOM Worker
 
 const app = express();
-app.use(cors());
+const corsOptions = {
+  origin: function (origin, callback) {
+    if (!origin) return callback(null, true);
+    callback(null, true); // Allow all origins for dev
+  },
+  credentials: true,
+};
+app.use(cors(corsOptions));
 app.use(express.json());
 
 // Initialize Passport
@@ -70,6 +78,7 @@ mongoose
 
 // --- Socket.IO ---
 const io = new Server(server, { cors: { origin: "*" } });
+app.set("io", io);
 
 // --- API Routes ---
 app.use("/api/auth", authRoutes);        // Authentication routes (signup/login)

@@ -8,6 +8,7 @@ export default class MapManager {
         this.layers = {};
         this.restrictedZones = []; // { id, x, y, width, height, name }
         this.roomAccessRules = {};
+        this.dynamicBlockedZones = [];
         this.zoneGraphics = null;
 
         // Bounds
@@ -202,7 +203,17 @@ export default class MapManager {
 
         this.restrictedZones.forEach(zone => {
             const allowedRoles = this.roomAccessRules[zone.id] || [];
-            const canAccess = allowedRoles.includes(myRole);
+            
+            // Fallback to prefix match if no exact match
+            let finalRoles = allowedRoles;
+            if (finalRoles.length === 0) {
+                const baseId = Object.keys(this.roomAccessRules).find(ruleId => zone.id.startsWith(ruleId));
+                if (baseId) finalRoles = this.roomAccessRules[baseId];
+            }
+
+            const isReservedBlocked = this.dynamicBlockedZones.includes(zone.id);
+            const canRoleAccess = finalRoles.length === 0 || finalRoles.includes(myRole);
+            const canAccess = canRoleAccess && !isReservedBlocked;
 
             const color = canAccess ? 0x00ff00 : 0xff0000;
             const alpha = 0.3;
@@ -233,6 +244,11 @@ export default class MapManager {
                 py > zone.y && py < zone.y + zone.height);
 
             if (inZone) {
+                // Determine if specifically blocked by a scheduled meeting reservation
+                if (this.dynamicBlockedZones.includes(zone.id)) {
+                    return { allowed: false, zone, isReserved: true };
+                }
+
                 let allowedRoles = this.roomAccessRules[zone.id];
 
                 // Fallback to prefix match if no exact match (e.g. meeting_room_1 -> meeting_room)
@@ -247,7 +263,7 @@ export default class MapManager {
                 const canAccess = allowedRoles.includes(myRole);
 
                 if (!canAccess) {
-                    return { allowed: false, zone };
+                    return { allowed: false, zone, isReserved: false };
                 }
                 return { allowed: true, zone };
             }

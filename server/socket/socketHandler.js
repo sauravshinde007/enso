@@ -1,5 +1,7 @@
 // server/socket/socketHandler.js
 import User from "../models/User.js";
+import ScheduledMeeting from "../models/ScheduledMeeting.js";
+import MeetingRecord from "../models/MeetingRecord.js";
 import { ROOM_ACCESS_LEVELS } from "../config/roles.js";
 
 export default (io) => {
@@ -87,11 +89,13 @@ export default (io) => {
           roomAccess: ROOM_ACCESS_LEVELS
         });
 
-        // Announce to others
-        socket.broadcast.emit("playerJoined", {
-          id: socket.id,
-          ...players[socket.id],
-        });
+        if (!existingPlayer) {
+          // Announce to others only if they weren't already in the game
+          socket.broadcast.emit("playerJoined", {
+            id: socket.id,
+            ...players[socket.id],
+          });
+        }
       } catch (error) {
         console.error("Error during joinGame:", error);
       }
@@ -194,6 +198,41 @@ export default (io) => {
 
           await user.save();
           console.log(`Cleared active session for ${user.username}`);
+
+          // --- AUTO-END MEETINGS IF USER DISCONNECTS ---
+          try {
+              const activeRecord = await MeetingRecord.findOne({
+                  user: user._id,
+                  leaveTime: { $exists: false }
+              });
+              
+              if (activeRecord) {
+                  activeRecord.leaveTime = new Date();
+                  activeRecord.duration = Math.floor((activeRecord.leaveTime - activeRecord.joinTime) / 1000);
+                  await activeRecord.save();
+                  
+                  const scheduledRoomName = activeRecord.roomName.startsWith("meta-") 
+                      ? activeRecord.roomName.substring(5) 
+                      : activeRecord.roomName;
+
+                  // End scheduled meeting if this user was the leader
+                  const activeSchedule = await ScheduledMeeting.findOne({
+                      roomName: scheduledRoomName,
+                      leader: user._id,
+                      status: 'Active'
+                  });
+                  
+                  if (activeSchedule) {
+                      activeSchedule.status = 'Ended';
+                      activeSchedule.endTime = new Date();
+                      await activeSchedule.save();
+                      console.log(`Ended scheduled meeting ${activeSchedule._id} because leader disconnected.`);
+                  }
+              }
+          } catch (meetErr) {
+              console.error("Error auto-ending meeting on disconnect:", meetErr);
+          }
+          // ---------------------------------------------
         }
       } catch (error) {
         console.error("Error clearing socketId on disconnect:", error);

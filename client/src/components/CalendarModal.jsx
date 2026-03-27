@@ -24,6 +24,8 @@ import {
 import 'react-big-calendar/lib/css/react-big-calendar.css';
 import AddEventDialog from './AddEventDialog';
 import { useNotification } from '../context/NotificationContext';
+import { useAuth } from '../context/AuthContext';
+import axios from 'axios';
 
 // Setup the localizer for react-big-calendar
 const locales = {
@@ -99,6 +101,9 @@ const CustomToolbar = (toolbar) => {
 
 export default function CalendarModal({ isOpen, onClose }) {
     const { addNotification } = useNotification();
+    const { token } = useAuth();
+    const serverUrl = import.meta.env.VITE_SOCKET_SERVER_URL || 'http://localhost:3001';
+    
     const [isConnected, setIsConnected] = useState(false);
     const [events, setEvents] = useState([]);
     const [isConnecting, setIsConnecting] = useState(false);
@@ -134,6 +139,48 @@ export default function CalendarModal({ isOpen, onClose }) {
             localStorage.setItem('metaverse_calendar_events', JSON.stringify(events));
         }
     }, [events]);
+
+    // Fetch scheduled meetings from backend
+    useEffect(() => {
+        const fetchRemoteEvents = async () => {
+             if (!isOpen || !token) return;
+             try {
+                 const res = await axios.get(`${serverUrl}/api/meeting/scheduled`, {
+                     headers: { Authorization: `Bearer ${token}` }
+                 });
+                 if (res.data && res.data.meetings) {
+                     const mappedEvents = res.data.meetings.map(m => {
+                         const leaderName = m.leader?.username || "Team Leader";
+                         const cleanRoom = (m.roomName || '').replace('meta-', '').split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+                         return {
+                             id: m._id,
+                             title: `Meeting: ${cleanRoom} (${leaderName})`,
+                             start: new Date(m.startTime),
+                             end: new Date(m.endTime),
+                             allDay: false,
+                             resource: 'system',
+                             type: 'work',
+                             rawMeeting: m // hold ref if needed
+                         };
+                     });
+                     
+                     setEvents(prev => {
+                         const existingIds = new Set(prev.map(e => e.id));
+                         const newRemote = mappedEvents.filter(e => !existingIds.has(e.id));
+                         return [...prev, ...newRemote];
+                     });
+                 }
+             } catch (err) {
+                 console.error("Failed to fetch scheduled meetings for calendar", err);
+             }
+        };
+
+        fetchRemoteEvents();
+        
+        const handleRefresh = () => fetchRemoteEvents();
+        window.addEventListener('meeting-scheduled', handleRefresh);
+        return () => window.removeEventListener('meeting-scheduled', handleRefresh);
+    }, [isOpen, token, serverUrl]);
 
     const handleConnect = () => {
         setIsConnecting(true);
@@ -321,11 +368,11 @@ export default function CalendarModal({ isOpen, onClose }) {
                             /* Week & Day View - Faint Lines */
                             .rbc-time-view { border: none; }
                             .rbc-time-header-content { border-left: 1px solid #27272a; }
-                            .rbc-timeslot-group { border-bottom: 1px solid #27272a; }
+                            .rbc-timeslot-group { border-bottom: 1px solid #27272a; min-height: 60px; }
                             .rbc-day-slot { border-left: 1px solid #27272a; }
                             .rbc-time-content { border-top: 1px solid #27272a; }
                             .rbc-time-gutter .rbc-timeslot-group { border-bottom: 1px solid #27272a; }
-                            .rbc-day-slot .rbc-time-slot { border-top: 1px solid #27272a; opacity: 0.5; } /* Minimal hour lines */
+                            .rbc-day-slot .rbc-time-slot { border-top: none; } /* Hide 5-minute grid lines for cleaner look */
                             
                             /* Hide All-Day Row (The "Extra Row" above 12:00 AM) */
                             .rbc-allday-cell { display: none !important; }
@@ -342,6 +389,9 @@ export default function CalendarModal({ isOpen, onClose }) {
                             endAccessor="end"
                             style={{ height: '100%' }}
                             selectable
+                            step={5}
+                            timeslots={12}
+                            dayLayoutAlgorithm="no-overlap"
                             onSelectSlot={handleSelectSlot}
                             onSelectEvent={handleSelectEvent}
                             defaultView="month"
@@ -369,6 +419,11 @@ export default function CalendarModal({ isOpen, onClose }) {
                                     bg = '#064e3b'; // Emerald 950
                                     text = '#a7f3d0'; // Emerald 200
                                     border = '1px solid #059669'; // Emerald 600
+                                }
+                                if (event.resource === 'system') {
+                                    bg = '#082f49'; // Sky 950
+                                    text = '#bae6fd'; // Sky 200
+                                    border = '1px solid #0284c7'; // Sky 600
                                 }
 
                                 return {

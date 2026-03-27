@@ -39,6 +39,40 @@ export default class PlayerManager {
             this.isInMeeting = e.detail.active;
             console.log("Meeting status changed. Active:", this.isInMeeting);
         });
+
+        // Teleport Event Listener
+        window.addEventListener("teleport-player", (e) => {
+            if (!this.player) return;
+            const { zoneId } = e.detail;
+            const zone = this.mapManager.restrictedZones.find(z => z.id === zoneId);
+            if (zone) {
+                this.scene.tweens.killTweensOf(this.player);
+                this.player.x = zone.x + zone.width / 2;
+                this.player.y = zone.y + zone.height / 2 + 10; // offset slightly down
+                // Brief glow effect on teleport
+                const fx = this.player.preFX.addGlow(0x00ffff, 4, 0, false, 0.1, 10);
+                this.scene.time.delayedCall(1000, () => {
+                    if (this.player && this.player.preFX) this.player.preFX.remove(fx);
+                });
+            }
+        });
+
+        // Poll for dynamic room locks (every 5 seconds)
+        this.lockedZonesInterval = setInterval(async () => {
+            const token = localStorage.getItem("token");
+            if (!token) return;
+            const serverUrl = import.meta.env.VITE_SOCKET_SERVER_URL || 'http://localhost:3001';
+            try {
+                const res = await fetch(`${serverUrl}/api/meeting/locked-zones`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                const data = await res.json();
+                if (data.blockedZones) {
+                    this.mapManager.dynamicBlockedZones = data.blockedZones;
+                    this.mapManager.updateZoneVisuals(this.player ? this.player.role : 'employee');
+                }
+            } catch (err) {}
+        }, 5000);
     }
 
     createAnimations() {
@@ -78,6 +112,17 @@ export default class PlayerManager {
         if (this.mapManager.layers.walls) this.scene.physics.add.collider(this.player, this.mapManager.layers.walls);
         if (this.mapManager.layers.props) this.scene.physics.add.collider(this.player, this.mapManager.layers.props);
 
+        // Username text
+        this.playerUsernameText = this.scene.add
+            .text(x, y - 30, "You", {
+                fontFamily: 'Inter',
+                fontSize: "14px", fill: "#90EE90", fontStyle: "bold",
+                stroke: "#000000", strokeThickness: 3,
+            })
+            .setOrigin(0.5)
+            .setResolution(2)
+            .setDepth(6);
+
         this.createMobileJoystick();
     }
 
@@ -85,7 +130,15 @@ export default class PlayerManager {
         if (this.players[id]) this.players[id].destroy();
 
         const sprite = this.scene.add.sprite(0, 0, "ash");
-        const container = this.scene.add.container(data.x, data.y, [sprite]);
+        const nameText = this.scene.add.text(0, -30, data.username, {
+            fontFamily: 'Inter',
+            fontSize: "14px", fill: "#ffffff", fontStyle: "bold",
+            stroke: "#000000", strokeThickness: 3,
+        })
+            .setOrigin(0.5)
+            .setResolution(2);
+
+        const container = this.scene.add.container(data.x, data.y, [sprite, nameText]);
 
         // Glow
         const remoteGlow = sprite.preFX.addGlow(0xffffff, 4, 0, false, 0.1, 10);
@@ -113,6 +166,7 @@ export default class PlayerManager {
     moveRemotePlayer(id, pos, anim) {
         const container = this.players[id];
         if (container) {
+            this.scene.tweens.killTweensOf(container); // Prevent overlaps from building up!
             this.scene.tweens.add({
                 targets: container,
                 x: pos.x,
@@ -152,6 +206,28 @@ export default class PlayerManager {
 
             // 1. Chairs in Meeting Rooms -> Trigger Meeting
             if (interactable.type === 'chair') {
+                const chairCenterX = interactable.x + interactable.width / 2;
+                const chairCenterY = interactable.y + interactable.height / 2 - 10;
+
+                // Check if chair is occupied by another player
+                let isOccupied = false;
+                for (let id in this.players) {
+                    const p = this.players[id];
+                    if (Phaser.Math.Distance.Between(chairCenterX, chairCenterY, p.x, p.y) < 15) {
+                        isOccupied = true;
+                        break;
+                    }
+                }
+
+                if (isOccupied) {
+                    const toast = this.scene.add.text(this.player.x, this.player.y - 60, `Seat taken`, {
+                        fontFamily: 'Inter', fontSize: '14px', fill: '#ff4444',
+                        backgroundColor: '#000000aa', padding: { x: 5, y: 5 }
+                    }).setOrigin(0.5).setDepth(100);
+                    this.scene.tweens.add({ targets: toast, y: toast.y - 30, alpha: 0, duration: 1500, onComplete: () => toast.destroy() });
+                    return;
+                }
+
                 // Determine facing direction from custom property "dir" or "direction" set in Tiled
                 // If not set, default to 'up' or 'down' based on chair position?
                 // Tiled Property: "dir" : "up" | "down" | "left" | "right"
@@ -191,8 +267,8 @@ export default class PlayerManager {
     update(myRole) {
         if (!this.player || !this.player.body) return;
 
-        // Meeting or Chat Focus check
-        if (this.inputManager.chatFocused || this.isInMeeting) {
+        // Chat Focus check
+        if (this.inputManager.chatFocused) {
             this.player.body.setVelocity(0);
             return;
         }
@@ -208,7 +284,7 @@ export default class PlayerManager {
             const angle = Phaser.Math.Angle.Between(centerX, centerY, this.player.x, this.player.y);
             this.player.x += Math.cos(angle) * 5;
             this.player.y += Math.sin(angle) * 5;
-            this.showAccessDenied(zone.name);
+            this.showAccessDenied(zone.name, access.isReserved);
         } else {
             // Access allowed. Check if zone changed.
             const newZoneId = access.zone ? access.zone.id : null;
@@ -274,11 +350,15 @@ export default class PlayerManager {
 
         this.player.anims.play(this.currentAnimation, true);
 
-        // Update React Labels (New)
-        this.updatePlayerLabels();
+        // Calculate time for throttling
+        const now = Date.now();
+
+        // Update text position
+        if (this.playerUsernameText) {
+            this.playerUsernameText.setPosition(this.player.x, this.player.y - 30);
+        }
 
         // Limit Minimap Updates (10fps is enough)
-        const now = Date.now();
         if (!this.lastMinimapUpdate || now - this.lastMinimapUpdate > 100) {
             // 📡 Dispatch Minimap Data
             const otherPlayers = Object.keys(this.players).map(id => ({
@@ -303,62 +383,7 @@ export default class PlayerManager {
         }
     }
 
-    updatePlayerLabels() {
-        if (!this.player) return;
 
-        const camera = this.scene.cameras.main;
-        const labels = [];
-
-        // Helper to project world to screen
-        // We calculate relative to canvas DOM element
-        const getScreenPos = (wx, wy) => {
-            // worldView check
-            if (!camera.worldView.contains(wx, wy)) return null;
-
-            // Convert to screen
-            // (WorldX - CameraScrollX) * Zoom = ScreenX
-            // Note: If roundPixels is on, we might want to floor this manually?
-            // Actually, for CSS transform, float is fine, browser handles subpixel reflow.
-            const sx = (wx - camera.worldView.x) * camera.zoom;
-            const sy = (wy - camera.worldView.y) * camera.zoom;
-            return { x: sx, y: sy };
-        };
-
-        // 1. Local Player
-        const localPos = getScreenPos(this.player.x, this.player.y);
-        if (localPos) {
-            labels.push({
-                id: 'me',
-                username: 'You',
-                x: localPos.x + (5 * camera.zoom),
-                y: localPos.y - (25 * camera.zoom), // Offset scaled by zoom
-                isLocal: true
-            });
-        }
-
-        // 2. Remote Players
-        // this.players[id] is a Container {x, y, list...}
-        Object.keys(this.players).forEach(id => {
-            const container = this.players[id];
-            const pos = getScreenPos(container.x, container.y);
-            if (pos) {
-                const username = this.playerUsernames.get(id) || "Player";
-                labels.push({
-                    id: id,
-                    username: username,
-                    x: pos.x + (5 * camera.zoom),
-                    y: pos.y - (25 * camera.zoom),
-                    isLocal: false
-                });
-            }
-        });
-
-        // Dispatch efficient event
-        // We use a custom event on window
-        window.dispatchEvent(new CustomEvent('player-labels-update', {
-            detail: labels
-        }));
-    }
 
     updateInteractionUI() {
         if (!this.player) return;
@@ -400,11 +425,13 @@ export default class PlayerManager {
         }
     }
 
-    showAccessDenied(zoneName) {
+    showAccessDenied(zoneName, isReserved = false) {
         if (this._lastWarning && Date.now() - this._lastWarning < 1000) return;
         this._lastWarning = Date.now();
 
-        const toast = this.scene.add.text(this.player.x, this.player.y - 60, `🔒 Access to ${zoneName} Denied`, {
+        const msg = isReserved ? `🔒 ${zoneName} is Reserved` : `🔒 Access to ${zoneName} Denied`;
+
+        const toast = this.scene.add.text(this.player.x, this.player.y - 60, msg, {
             fontFamily: 'Inter',
             fontSize: '16px', fontStyle: 'bold',
             fill: '#ff0000', stroke: '#ffffff', strokeThickness: 4,
