@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node -r dotenv/config index.js",
     "dev": "nodemon -r dotenv/config index.js",
+    "agent": "node agent.js start dev",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
@@ -14,6 +15,9 @@
   "description": "",
   "dependencies": {
     "@ffmpeg-installer/ffmpeg": "^1.1.0",
+    "@livekit/agents": "^1.2.1",
+    "@livekit/agents-plugin-openai": "^1.2.1",
+    "@livekit/agents-plugin-silero": "^1.2.1",
     "axios": "^1.13.5",
     "bcryptjs": "^3.0.2",
     "bullmq": "^5.70.1",

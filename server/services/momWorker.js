@@ -49,89 +49,11 @@ export const momWorker = new Worker('momQueue', async job => {
     try {
         let transcriptText = '';
 
-        // 1. Fetch transcript chunks
+        // 1. Fetch transcript from the LiveKit STT Agent recordings in MongoDB
         if (sessionId) {
-            const meetingsDir = path.join(os.tmpdir(), "metaverse_meetings");
-
-            // Look for individual uploaded WebM chunks inside the tmp directory (per user)
-            if (fs.existsSync(meetingsDir)) {
-                const files = fs.readdirSync(meetingsDir)
-                                .filter(f => f.startsWith(`${sessionId}__`))
-                                .sort(); // Sorts chronologically thanks to Date.now() in filename
-
-                let previousWhisperContext = "Meeting, discussion, work, collaboration.";
-                
-                for (const file of files) {
-                    const fullPath = path.join(meetingsDir, file);
-                    // Extract username from "sessionId__username__timestamp.webm"
-                    const parts = file.split('__');
-                    const parsedUsername = parts.length >= 2 ? parts[1] : "Unknown";
-                    const wavPath = fullPath.replace('.webm', '.wav');
-
-                    try {
-                        // Convert to WAV 16kHz PCM
-                        await new Promise((resolve, reject) => {
-                            ffmpeg(fullPath)
-                                .audioFrequency(16000)
-                                .audioCodec('pcm_s16le')
-                                .format('wav')
-                                .on('end', resolve)
-                                .on('error', reject)
-                                .save(wavPath);
-                        });
-
-                        const stream = fs.createReadStream(wavPath);
-                        const transcription = await groq.audio.transcriptions.create({
-                            file: stream,
-                            model: "whisper-large-v3",
-                            prompt: previousWhisperContext,
-                            language: "en"
-                        });
-
-                        let text = transcription.text.trim();
-
-                        // Aggressively filter out Whisper silence hallucinations and dataset artifacts
-                        const artifacts = [
-                            "Thank you for watching", "Thanks for watching", "Thank you.", "Thank you",
-                            "Transcription by", "Translation by", "Amara.org", "Analog speech",
-                            "Please do not use the speech", "Please ignore background noise",
-                            "[Silence]", "[BLANK_AUDIO]", "Subscribe to", "Please subscribe",
-                            "Meeting, discussion, work, collaboration."
-                        ];
-
-                        // Remove artifact loops
-                        artifacts.forEach(artifact => {
-                            const regex = new RegExp(artifact, "gi");
-                            text = text.replace(regex, "");
-                        });
-
-                        // Clean up hanging non-word chunks often left behind by hallucination trimming
-                        text = text.replace(/^[.\-\s]+|[.\-\s]+$/g, "").trim();
-
-                        // Only append if there's meaningful text left
-                        if (text && text.length > 3) {
-                            transcriptText += `\n${parsedUsername}: ${text}`;
-                            
-                            // Capture rolling window 30 words context
-                            const words = text.split(/\s+/);
-                            const lastWords = words.slice(-30).join(' ');
-                            previousWhisperContext = lastWords || "Meeting, discussion, work, collaboration.";
-                        }
-                    } catch (e) {
-                        console.error(`Failed to completely transcribe file ${file}:`, e);
-                    } finally {
-                        // Cleanup
-                        if (fs.existsSync(wavPath)) fs.unlinkSync(wavPath);
-                    }
-                }
-            }
-
-            // Fallback: If no valid tmp stream files exist, fallback to the legacy db snippets
-            if (!transcriptText || transcriptText.trim() === '') {
-                const transcripts = await MeetingTranscript.find({ sessionId }).sort({ timestamp: 1 });
-                if (transcripts && transcripts.length > 0) {
-                    transcriptText = transcripts.map(t => `${t.username}: ${t.text}`).join("\n");
-                }
+            const transcripts = await MeetingTranscript.find({ sessionId }).sort({ timestamp: 1 });
+            if (transcripts && transcripts.length > 0) {
+                transcriptText = transcripts.map(t => `${t.username}: ${t.text}`).join("\n");
             }
         }
 

@@ -12,63 +12,6 @@ import '@livekit/components-styles';
 import ScheduleModal from './ScheduleModal';
 import socketService from '../services/socketService';
 
-// Native stream hook for accurate, unsilenced MOM recording
-const setupMicrophoneCapture = async (currentSessionId, token, serverUrl) => {
-    try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        let activeRecorders = [];
-
-        const stopAll = () => {
-            activeRecorders.forEach(mr => { if (mr.state !== 'inactive') mr.stop(); });
-            stream.getTracks().forEach(track => track.stop());
-        };
-
-        const startRecordingCycle = () => {
-            if (!window._meetingActive) return;
-
-            const options = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-                ? { mimeType: 'audio/webm;codecs=opus', audioBitsPerSecond: 128000 }
-                : { mimeType: 'audio/webm', audioBitsPerSecond: 128000 };
-
-            try {
-                const mediaRecorder = new MediaRecorder(stream, options);
-                activeRecorders.push(mediaRecorder);
-
-                mediaRecorder.ondataavailable = async (e) => {
-                    if (e.data.size > 0 && window._currentSessionId) {
-                        const formData = new FormData();
-                        formData.append('audioFile', e.data, 'chunk.webm');
-                        formData.append('sessionId', window._currentSessionId);
-                        axios.post(`${serverUrl}/api/meeting/transcribe`, formData, {
-                            headers: { Authorization: `Bearer ${token}` }
-                        }).catch(console.error);
-                    }
-                };
-
-                mediaRecorder.start();
-
-                setTimeout(() => {
-                    if (mediaRecorder.state !== 'inactive') mediaRecorder.stop();
-                    activeRecorders = activeRecorders.filter(r => r !== mediaRecorder);
-                }, 65000);
-
-                setTimeout(() => {
-                    if (window._meetingActive) startRecordingCycle();
-                }, 60000);
-
-            } catch (e) {
-                console.error("Safely caught MediaRecorder error:", e);
-            }
-        };
-
-        startRecordingCycle();
-        return stopAll;
-    } catch (err) {
-        console.error("Failed to acquire raw microphone for MOM:", err);
-        return () => {};
-    }
-};
-
 const MeetingModal = () => {
     const { token } = useAuth();
     const [zone, setZone] = useState(null); // { zoneId, zoneName }
@@ -156,15 +99,6 @@ const MeetingModal = () => {
                     if (trackRes.data.sessionId) {
                         window._currentSessionId = trackRes.data.sessionId;
                         window._meetingActive = true;
-                        
-                        // Start native capture 
-                        setTimeout(async () => {
-                             window._stopNativeCapture = await setupMicrophoneCapture(
-                                window._currentSessionId, 
-                                token, 
-                                serverUrl
-                             );
-                        }, 500);
                     }
 
                 } catch (e) {
@@ -191,11 +125,6 @@ const MeetingModal = () => {
                 setMeetingUrl(null);
                 window._meetingActive = false;
                 window.dispatchEvent(new CustomEvent('meeting-status-change', { detail: { active: false } }));
-
-                if (window._stopNativeCapture) {
-                    window._stopNativeCapture();
-                    window._stopNativeCapture = null;
-                }
 
                 if (recordId || window._currentRecordId) {
                     try {

@@ -85,46 +85,16 @@ export default function HomePage() {
           >
             <div className="relative rounded-2xl border border-zinc-800 bg-zinc-900/40 p-2 shadow-2xl backdrop-blur-md">
               <div className="absolute inset-x-0 -top-px h-px bg-gradient-to-r from-transparent via-zinc-500/50 to-transparent opacity-50" />
-              <img
-                src="/assets/screenshot.png"
-                alt="App Dashboard"
-                className="hidden dark:block w-full rounded-xl shadow-inner border border-zinc-700/50"
-              />
-              <img
-                src="/assets/screenshot.png"
-                alt="App Dashboard Light"
-                className="block dark:hidden w-full rounded-xl shadow-inner border border-zinc-200"
+              <video
+                src="/assets/intro.mp4"
+                autoPlay
+                loop
+                muted
+                playsInline
+                className="w-full rounded-xl shadow-inner border border-zinc-200 dark:border-zinc-700/50"
               />
             </div>
           </AnimatedGroup>
-
-          {/* Trusted by Logos */}
-          <section className="mt-24 w-full border-t border-zinc-800/50 pt-10">
-            <div className="mx-auto max-w-5xl px-6 text-center">
-              <div className="mb-8 text-sm font-medium text-zinc-500 uppercase tracking-widest">Trusted by industry leaders</div>
-              <div className="flex flex-wrap items-center justify-center gap-x-12 gap-y-8 opacity-70 grayscale hover:grayscale-0 transition-all duration-500">
-                {[
-                  'https://html.tailus.io/blocks/customers/nvidia.svg',
-                  'https://html.tailus.io/blocks/customers/column.svg',
-                  'https://html.tailus.io/blocks/customers/github.svg',
-                  'https://html.tailus.io/blocks/customers/nike.svg',
-                  'https://html.tailus.io/blocks/customers/lemonsqueezy.svg',
-                  'https://html.tailus.io/blocks/customers/laravel.svg',
-                  'https://html.tailus.io/blocks/customers/lilly.svg',
-                  'https://html.tailus.io/blocks/customers/openai.svg',
-                ].map((src, i) => (
-                  <div key={i} className="flex items-center justify-center">
-                    <img
-                      src={src}
-                      alt={`logo-${i}`}
-                      className="h-7 w-auto object-contain invert"
-                    />
-                  </div>
-                ))}
-              </div>
-            </div>
-          </section>
-
         </div>
       </main>
     </div>
