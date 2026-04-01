@@ -1,6 +1,7 @@
 
 import Phaser from "phaser";
 import socketService from "../../services/socketService";
+import Pathfinder from "../utils/Pathfinder";
 
 export default class PlayerManager {
     constructor(scene, inputManager, mapManager) {
@@ -34,6 +35,7 @@ export default class PlayerManager {
 
         this.isInMeeting = false;
         this.isUsingComputer = false;
+        this.isAutoWalking = false;
 
         // Events
         this.scene.events.on("gameInput", (input) => this.handleGameInput(input));
@@ -68,6 +70,48 @@ export default class PlayerManager {
             }
         });
 
+        // Fast travel to assigned desk
+        window.addEventListener("walk-to-desk", () => {
+            if (!this.player) return;
+
+            if (!this.assignedComputerId) {
+                this.showAccessDenied("No Desk Assigned", true);
+                return;
+            }
+
+            const computer = this.mapManager.interactables.find(obj => {
+                const compId = String(obj.id || `computer_${obj.x}_${obj.y}`);
+                return compId === String(this.assignedComputerId);
+            });
+
+            if (computer) {
+                this.scene.tweens.killTweensOf(this.player);
+                
+                const targetX = computer.x + computer.width / 2;
+                const targetY = computer.y + computer.height / 2;
+
+                // Stop active manual movement
+                this.movement = { up: false, down: false, left: false, right: false };
+                this.player.body.setVelocity(0);
+
+                // Initialize Pathfinder strictly caching static map elements
+                if (!this.pathfinder) {
+                    this.pathfinder = new Pathfinder(this.mapManager);
+                }
+
+                // Retrieve A* sequence arrays avoiding colliders gracefully
+                const path = this.pathfinder.findPath(this.player.x, this.player.y, targetX, targetY);
+
+                if (path && path.length > 0) {
+                    this.followPathSequence(path);
+                } else {
+                    this.showAccessDenied("No valid path to desk found", true);
+                }
+            } else {
+                this.showAccessDenied("Desk not found on Map", true);
+            }
+        });
+
         // Poll for dynamic room locks (every 5 seconds)
         this.lockedZonesInterval = setInterval(async () => {
             const token = localStorage.getItem("token");
@@ -84,6 +128,71 @@ export default class PlayerManager {
                 }
             } catch (err) { }
         }, 5000);
+    }
+
+    followPathSequence(path) {
+        this.isAutoWalking = true;
+        this.player.body.checkCollision.none = true;
+        this.scene.tweens.killTweensOf(this.player);
+
+        let pathIndex = 0;
+        
+        const walkToNextNode = () => {
+            // Give user control to override gracefully
+            let isMovingManually = this.movement.left || this.movement.right || this.movement.up || this.movement.down;
+            if (isMovingManually || !this.isAutoWalking) {
+                this.isAutoWalking = false;
+                this.player.body.checkCollision.none = false;
+                return;
+            }
+
+            if (pathIndex >= path.length) {
+                this.isAutoWalking = false;
+                this.player.body.checkCollision.none = false;
+                this.stopAnimation();
+                
+                const fx = this.player.preFX.addGlow(0x00ffff, 4, 0, false, 0.1, 10);
+                this.scene.time.delayedCall(1200, () => {
+                    if (this.player && this.player.preFX) this.player.preFX.remove(fx);
+                });
+                return;
+            }
+
+            const target = path[pathIndex];
+            const distance = Phaser.Math.Distance.Between(this.player.x, this.player.y, target.x, target.y);
+            const duration = (distance / 200) * 1000;
+
+            this.scene.tweens.add({
+                targets: this.player,
+                x: target.x,
+                y: target.y,
+                duration: duration,
+                ease: 'Linear',
+                onUpdate: () => {
+                    const dx = target.x - this.player.x;
+                    const dy = target.y - this.player.y;
+                    
+                    if (Math.abs(dx) > Math.abs(dy)) {
+                        this.currentAnimation = dx > 0 ? "walk-right" : "walk-left";
+                        this.lastDirection = dx > 0 ? "right" : "left";
+                    } else if (Math.abs(dy) > Math.abs(dx)) {
+                        this.currentAnimation = dy > 0 ? "walk-down" : "walk-up";
+                        this.lastDirection = dy > 0 ? "down" : "up";
+                    }
+                    this.player.anims.play(this.currentAnimation, true);
+
+                    if (this.scene.cameraManager) {
+                        this.scene.cameraManager.checkResumeFollow(1, 1);
+                    }
+                },
+                onComplete: () => {
+                    pathIndex++;
+                    walkToNextNode();
+                }
+            });
+        };
+
+        walkToNextNode();
     }
 
     createAnimations() {
@@ -301,6 +410,19 @@ export default class PlayerManager {
             else if (interactable.type === 'computer') {
                 console.log("🖥️ Computer interaction triggered");
 
+                const computerId = String(interactable.id || `computer_${interactable.x}_${interactable.y}`);
+
+                // Desk ownership check
+                if (!this.assignedComputerId) {
+                    this.showAccessDenied("Access Denied: No Desk Assigned", true);
+                    return;
+                }
+
+                if (String(this.assignedComputerId) !== computerId) {
+                    this.showAccessDenied("Access Denied: Not Your Desk", true);
+                    return;
+                }
+
                 // Determine facing direction from custom property "dir"
                 const dirProp = interactable.rawProperties && interactable.rawProperties.find(p => p.name === "dir");
                 const computerDir = dirProp ? dirProp.value : "down";
@@ -320,7 +442,7 @@ export default class PlayerManager {
                 socketService.emitWorking(true);
                 this.setWorkingStatus(this.player, true, true);
                 window.dispatchEvent(new CustomEvent('open-computer', { 
-                    detail: { computerId: interactable.id || `computer_${interactable.x}_${interactable.y}` } 
+                    detail: { computerId } 
                 }));
             }
         }
@@ -394,23 +516,33 @@ export default class PlayerManager {
             }
         }
 
-        if (this.player.body.velocity.x < 0) {
-            this.currentAnimation = "walk-left";
-            this.lastDirection = "left";
-        } else if (this.player.body.velocity.x > 0) {
-            this.currentAnimation = "walk-right";
-            this.lastDirection = "right";
-        } else if (this.player.body.velocity.y < 0) {
-            this.currentAnimation = "walk-up";
-            this.lastDirection = "up";
-        } else if (this.player.body.velocity.y > 0) {
-            this.currentAnimation = "walk-down";
-            this.lastDirection = "down";
-        } else {
-            this.currentAnimation = `idle-${this.lastDirection}`;
+        // Cancel AutoWalk if player presses manual movement key
+        let isMovingManually = this.movement.left || this.movement.right || this.movement.up || this.movement.down;
+        if (this.isAutoWalking && isMovingManually) {
+            this.isAutoWalking = false;
+            this.player.body.checkCollision.none = false;
+            this.scene.tweens.killTweensOf(this.player);
         }
 
-        this.player.anims.play(this.currentAnimation, true);
+        if (!this.isAutoWalking) {
+            if (this.player.body.velocity.x < 0) {
+                this.currentAnimation = "walk-left";
+                this.lastDirection = "left";
+            } else if (this.player.body.velocity.x > 0) {
+                this.currentAnimation = "walk-right";
+                this.lastDirection = "right";
+            } else if (this.player.body.velocity.y < 0) {
+                this.currentAnimation = "walk-up";
+                this.lastDirection = "up";
+            } else if (this.player.body.velocity.y > 0) {
+                this.currentAnimation = "walk-down";
+                this.lastDirection = "down";
+            } else {
+                this.currentAnimation = `idle-${this.lastDirection}`;
+            }
+
+            this.player.anims.play(this.currentAnimation, true);
+        }
 
         // Calculate time for throttling
         const now = Date.now();

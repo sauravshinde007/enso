@@ -8,12 +8,14 @@ const ROLES = ['employee', 'admin', 'hr', 'ceo'];
 export default function AdminPanel({ isOpen, onClose }) {
     const { user, token } = useAuth();
     const [users, setUsers] = useState([]);
+    const [computers, setComputers] = useState([]); // All computer IDs
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);
 
     useEffect(() => {
         if (isOpen && user?.role === 'admin') {
             fetchUsers();
+            fetchComputers();
         }
     }, [isOpen, user]);
 
@@ -30,6 +32,32 @@ export default function AdminPanel({ isOpen, onClose }) {
             setError("Failed to load users");
         } finally {
             setLoading(false);
+        }
+    };
+
+    const fetchComputers = async () => {
+        try {
+            const res = await axios.get('/assets/map/map2.tmj');
+            const mapData = res.data;
+            const interactablesLayer = mapData.layers.find(l => l.name === 'Interactables');
+            
+            if (interactablesLayer && interactablesLayer.objects) {
+                const computerObjects = interactablesLayer.objects.filter(obj => {
+                    const typeProp = obj.properties && obj.properties.find(p => p.name === 'type');
+                    const compType = typeProp ? typeProp.value : obj.name;
+                    return compType && compType.toLowerCase() === 'computer';
+                });
+
+                const compIds = computerObjects.map(obj => {
+                    const idProp = obj.properties && obj.properties.find(p => p.name === 'id');
+                    const baseId = idProp ? idProp.value : obj.id;
+                    return baseId ? String(baseId) : `computer_${obj.x}_${obj.y}`;
+                });
+                
+                setComputers(compIds);
+            }
+        } catch (err) {
+            console.error("Failed to load map data", err);
         }
     };
 
@@ -54,6 +82,34 @@ export default function AdminPanel({ isOpen, onClose }) {
         } catch (err) {
             console.error("Failed to update role", err);
             alert("Failed to update role");
+        }
+    };
+
+    const handleComputerChange = async (userId, newComputerId) => {
+        try {
+            const response = await axios.put(
+                `${import.meta.env.VITE_API_URL || 'http://localhost:3001'}/api/users/${userId}/computer`,
+                { computerId: newComputerId.trim() || null },
+                { headers: { Authorization: `Bearer ${token}` } }
+            );
+
+            // Update local state
+            setUsers(prev => prev.map(u =>
+                u._id === userId ? { ...u, assignedComputerId: newComputerId.trim() || null } : u
+            ));
+
+            if (userId === user.id || userId === user._id) {
+                alert("You updated your own desk. Please refresh the page to sync changes!");
+            }
+        } catch (err) {
+            console.error("Failed to assign computer", err);
+            const msg = err.response && err.response.data && err.response.data.message 
+                ? err.response.data.message 
+                : "Failed to assign computer";
+            alert(msg);
+            
+            // Re-fetch users to revert UI to source of truth
+            fetchUsers();
         }
     };
 
@@ -83,17 +139,25 @@ export default function AdminPanel({ isOpen, onClose }) {
                     ) : (
                         <div className="space-y-4">
                             <div className="grid grid-cols-12 gap-4 text-xs font-bold text-gray-500 uppercase tracking-wider mb-2 px-2">
-                                <div className="col-span-4">User</div>
-                                <div className="col-span-5">Email</div>
-                                <div className="col-span-3">Role</div>
+                                <div className="col-span-3">User</div>
+                                <div className="col-span-4">Email</div>
+                                <div className="col-span-2">Role</div>
+                                <div className="col-span-3">Assigned Desk</div>
                             </div>
 
-                            {users.map((u) => (
-                                <div key={u._id} className="grid grid-cols-12 gap-4 items-center bg-[#222] p-3 rounded-lg border border-[#333] hover:border-[#444] transition-all">
+                            {(() => {
+                                const globallyAssignedIds = new Set(users.map(u => String(u.assignedComputerId)).filter(id => id !== "null" && id !== "undefined"));
+
+                                return users.map((u) => {
+                                    const userDesk = String(u.assignedComputerId || "");
+                                    const availableComputers = computers.filter(cId => !globallyAssignedIds.has(String(cId)) || String(cId) === userDesk);
+
+                                    return (
+                                        <div key={u._id} className="grid grid-cols-12 gap-4 items-center bg-[#222] p-3 rounded-lg border border-[#333] hover:border-[#444] transition-all">
 
                                     {/* User Info */}
-                                    <div className="col-span-4 flex items-center gap-3">
-                                        <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white font-bold text-sm overflow-hidden">
+                                    <div className="col-span-3 flex items-center gap-3">
+                                        <div className="w-8 h-8 flex-shrink-0 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white font-bold text-sm overflow-hidden">
                                             {u.avatar ? (
                                                 <img
                                                     src={u.avatar}
@@ -108,12 +172,12 @@ export default function AdminPanel({ isOpen, onClose }) {
                                     </div>
 
                                     {/* Email */}
-                                    <div className="col-span-5 text-gray-400 text-sm truncate">
+                                    <div className="col-span-4 text-gray-400 text-sm truncate">
                                         {u.email}
                                     </div>
 
                                     {/* Role Selector */}
-                                    <div className="col-span-3">
+                                    <div className="col-span-2">
                                         <div className="relative">
                                             <select
                                                 value={u.role}
@@ -130,8 +194,36 @@ export default function AdminPanel({ isOpen, onClose }) {
                                             </select>
                                         </div>
                                     </div>
+
+                                    {/* Desk Assignment */}
+                                    <div className="col-span-3">
+                                        <div className="relative">
+                                            <select
+                                                value={userDesk}
+                                                onChange={(e) => {
+                                                    if (e.target.value !== userDesk) {
+                                                        handleComputerChange(u._id, e.target.value);
+                                                    }
+                                                }}
+                                                className="w-full bg-[#111] border border-[#444] text-xs rounded px-2 py-1.5 focus:outline-none focus:border-blue-500 appearance-none cursor-pointer text-gray-200"
+                                            >
+                                                <option value="">Unassigned</option>
+                                                {availableComputers.map(cId => (
+                                                    <option key={cId} value={cId}>
+                                                        Desk {cId}
+                                                    </option>
+                                                ))}
+                                                {/* Fallback if their current desk isn't in the map file for some reason */}
+                                                {userDesk && !availableComputers.includes(userDesk) && (
+                                                    <option value={userDesk} disabled>Desk {userDesk} (Not Found)</option>
+                                                )}
+                                            </select>
+                                        </div>
+                                    </div>
                                 </div>
-                            ))}
+                                    );
+                                });
+                            })()}
                         </div>
                     )}
                 </div>

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Plus, Minus } from 'lucide-react';
+import { Plus, Minus, Home } from 'lucide-react';
 import '../styles/zoomcontrols.css';
 
 export default function ZoomControls() {
@@ -12,8 +12,15 @@ export default function ZoomControls() {
         window.dispatchEvent(new CustomEvent('zoom-out'));
     };
 
+    const handleWalkToDesk = () => {
+        window.dispatchEvent(new CustomEvent('walk-to-desk'));
+    };
+
     return (
         <div className="zoom-controls-container">
+            <button className="zoom-button" onClick={handleWalkToDesk} title="Walk to My Desk">
+                <Home size={20} />
+            </button>
             <button className="zoom-button" onClick={handleZoomIn} title="Zoom In">
                 <Plus size={20} />
             </button>

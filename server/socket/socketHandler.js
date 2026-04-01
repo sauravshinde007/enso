@@ -82,6 +82,7 @@ export default (io) => {
           videoEnabled: existingPlayer ? existingPlayer.videoEnabled : false,
           nearbyPlayers: [],
           role: userRole,
+          assignedComputerId: user.assignedComputerId || null,
         };
 
         // Send full state to the new player

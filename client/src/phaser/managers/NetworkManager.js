@@ -57,6 +57,9 @@ export default class NetworkManager {
                         console.log("👮 My Role is:", this.myRole);
                         this.mapManager.updateZoneVisuals(this.myRole);
                     }
+                    if (p.assignedComputerId !== undefined) {
+                        this.playerManager.assignedComputerId = p.assignedComputerId;
+                    }
                 }
             });
         };

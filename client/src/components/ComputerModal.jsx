@@ -14,6 +14,19 @@ const ComputerModal = () => {
     });
     const videoRef = useRef(null);
 
+    // Toggle body class for VideoGrid layout shifting
+    useEffect(() => {
+        if (isOpen) {
+            document.body.classList.add("computer-modal-open");
+        } else {
+            document.body.classList.remove("computer-modal-open");
+        }
+        
+        return () => {
+            document.body.classList.remove("computer-modal-open");
+        };
+    }, [isOpen]);
+
     useEffect(() => {
         const handleOpen = (e) => {
             const compId = e.detail?.computerId;
