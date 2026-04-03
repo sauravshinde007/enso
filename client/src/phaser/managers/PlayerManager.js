@@ -1,5 +1,7 @@
 
 import Phaser from "phaser";
+import socketService from "../../services/socketService";
+import Pathfinder from "../utils/Pathfinder";
 
 export default class PlayerManager {
     constructor(scene, inputManager, mapManager) {
@@ -27,17 +29,31 @@ export default class PlayerManager {
 
         // Interaction UI
         this.interactionText = null;
-        // Interaction UI
-        this.interactionText = null;
         this.currentInteractable = null;
 
         this.isInMeeting = false;
+        this.isUsingComputer = false;
+        this.isAutoWalking = false;
+
+        this.viewerDeskId = null;
+        this.viewerDeskInteractable = null;
 
         // Events
         this.scene.events.on("gameInput", (input) => this.handleGameInput(input));
         window.addEventListener("meeting-status-change", (e) => {
             this.isInMeeting = e.detail.active;
             console.log("Meeting status changed. Active:", this.isInMeeting);
+        });
+
+        window.addEventListener("close-computer", () => {
+            this.isUsingComputer = false;
+            socketService.emitWorking(false);
+            if (this.player) {
+                this.setWorkingStatus(this.player, false, true);
+            }
+            this.viewerDeskId = null;
+            this.viewerDeskInteractable = null;
+            console.log("🖥️ Computer interaction closed");
         });
 
         // Teleport Event Listener
@@ -57,6 +73,48 @@ export default class PlayerManager {
             }
         });
 
+        // Fast travel to assigned desk
+        window.addEventListener("walk-to-desk", () => {
+            if (!this.player) return;
+
+            if (!this.assignedComputerId) {
+                this.showAccessDenied("No Desk Assigned", true);
+                return;
+            }
+
+            const computer = this.mapManager.interactables.find(obj => {
+                const compId = String(obj.id || `computer_${obj.x}_${obj.y}`);
+                return compId === String(this.assignedComputerId);
+            });
+
+            if (computer) {
+                this.scene.tweens.killTweensOf(this.player);
+                
+                const targetX = computer.x + computer.width / 2;
+                const targetY = computer.y + computer.height / 2;
+
+                // Stop active manual movement
+                this.movement = { up: false, down: false, left: false, right: false };
+                this.player.body.setVelocity(0);
+
+                // Initialize Pathfinder strictly caching static map elements
+                if (!this.pathfinder) {
+                    this.pathfinder = new Pathfinder(this.mapManager);
+                }
+
+                // Retrieve A* sequence arrays avoiding colliders gracefully
+                const path = this.pathfinder.findPath(this.player.x, this.player.y, targetX, targetY);
+
+                if (path && path.length > 0) {
+                    this.followPathSequence(path);
+                } else {
+                    this.showAccessDenied("No valid path to desk found", true);
+                }
+            } else {
+                this.showAccessDenied("Desk not found on Map", true);
+            }
+        });
+
         // Poll for dynamic room locks (every 5 seconds)
         this.lockedZonesInterval = setInterval(async () => {
             const token = localStorage.getItem("token");
@@ -71,8 +129,73 @@ export default class PlayerManager {
                     this.mapManager.dynamicBlockedZones = data.blockedZones;
                     this.mapManager.updateZoneVisuals(this.player ? this.player.role : 'employee');
                 }
-            } catch (err) {}
+            } catch (err) { }
         }, 5000);
+    }
+
+    followPathSequence(path) {
+        this.isAutoWalking = true;
+        this.player.body.checkCollision.none = true;
+        this.scene.tweens.killTweensOf(this.player);
+
+        let pathIndex = 0;
+        
+        const walkToNextNode = () => {
+            // Give user control to override gracefully
+            let isMovingManually = this.movement.left || this.movement.right || this.movement.up || this.movement.down;
+            if (isMovingManually || !this.isAutoWalking) {
+                this.isAutoWalking = false;
+                this.player.body.checkCollision.none = false;
+                return;
+            }
+
+            if (pathIndex >= path.length) {
+                this.isAutoWalking = false;
+                this.player.body.checkCollision.none = false;
+                this.stopAnimation();
+                
+                const fx = this.player.preFX.addGlow(0x00ffff, 4, 0, false, 0.1, 10);
+                this.scene.time.delayedCall(1200, () => {
+                    if (this.player && this.player.preFX) this.player.preFX.remove(fx);
+                });
+                return;
+            }
+
+            const target = path[pathIndex];
+            const distance = Phaser.Math.Distance.Between(this.player.x, this.player.y, target.x, target.y);
+            const duration = (distance / 200) * 1000;
+
+            this.scene.tweens.add({
+                targets: this.player,
+                x: target.x,
+                y: target.y,
+                duration: duration,
+                ease: 'Linear',
+                onUpdate: () => {
+                    const dx = target.x - this.player.x;
+                    const dy = target.y - this.player.y;
+                    
+                    if (Math.abs(dx) > Math.abs(dy)) {
+                        this.currentAnimation = dx > 0 ? "walk-right" : "walk-left";
+                        this.lastDirection = dx > 0 ? "right" : "left";
+                    } else if (Math.abs(dy) > Math.abs(dx)) {
+                        this.currentAnimation = dy > 0 ? "walk-down" : "walk-up";
+                        this.lastDirection = dy > 0 ? "down" : "up";
+                    }
+                    this.player.anims.play(this.currentAnimation, true);
+
+                    if (this.scene.cameraManager) {
+                        this.scene.cameraManager.checkResumeFollow(1, 1);
+                    }
+                },
+                onComplete: () => {
+                    pathIndex++;
+                    walkToNextNode();
+                }
+            });
+        };
+
+        walkToNextNode();
     }
 
     createAnimations() {
@@ -129,30 +252,61 @@ export default class PlayerManager {
     addOtherPlayer(id, data) {
         if (this.players[id]) this.players[id].destroy();
 
-        const sprite = this.scene.add.sprite(0, 0, "ash");
-        const nameText = this.scene.add.text(0, -30, data.username, {
-            fontFamily: 'Inter',
-            fontSize: "14px", fill: "#ffffff", fontStyle: "bold",
-            stroke: "#000000", strokeThickness: 3,
-        })
-            .setOrigin(0.5)
-            .setResolution(2);
+        // Create a wrapper object that mimics a Phaser object with x/y properties
+        const remotePlayer = {
+            scene: this.scene,
+            _x: data.x,
+            _y: data.y,
+            sprite: this.scene.add.sprite(data.x, data.y, "ash"),
+            nameText: this.scene.add.text(data.x, data.y - 30, data.username, {
+                fontFamily: 'Inter',
+                fontSize: "14px", fill: "#ffffff", fontStyle: "bold",
+                stroke: "#000000", strokeThickness: 3,
+            }).setOrigin(0.5).setResolution(2),
+            workingText: null,
 
-        const container = this.scene.add.container(data.x, data.y, [sprite, nameText]);
+            get x() { return this._x; },
+            set x(val) {
+                this._x = val;
+                this.sprite.x = val;
+                this.nameText.x = val;
+                if (this.workingText) this.workingText.x = val;
+            },
+
+            get y() { return this._y; },
+            set y(val) {
+                this._y = val;
+                this.sprite.y = val;
+                this.nameText.y = val - 30;
+                if (this.workingText) this.workingText.y = val - 48;
+            },
+
+            destroy() {
+                this.sprite.destroy();
+                this.nameText.destroy();
+                if (this.workingText) this.workingText.destroy();
+            }
+        };
 
         // Glow
-        const remoteGlow = sprite.preFX.addGlow(0xffffff, 4, 0, false, 0.1, 10);
+        const remoteGlow = remotePlayer.sprite.preFX.addGlow(0xffffff, 4, 0, false, 0.1, 10);
         remoteGlow.setActive(false);
-        sprite.setInteractive();
-        sprite.on('pointerover', () => remoteGlow.setActive(true));
-        sprite.on('pointerout', () => remoteGlow.setActive(false));
+        remotePlayer.sprite.setInteractive();
+        remotePlayer.sprite.on('pointerover', () => remoteGlow.setActive(true));
+        remotePlayer.sprite.on('pointerout', () => remoteGlow.setActive(false));
 
-        container.setDepth(5);
-        if (data.anim) sprite.anims.play(data.anim, true);
-        else sprite.setFrame(18);
+        remotePlayer.sprite.setDepth(5);
+        remotePlayer.nameText.setDepth(6);
+        
+        if (data.anim) remotePlayer.sprite.anims.play(data.anim, true);
+        else remotePlayer.sprite.setFrame(18);
 
-        this.players[id] = container;
+        this.players[id] = remotePlayer;
         this.playerUsernames.set(id, data.username);
+
+        if (data.isWorking) {
+            this.setWorkingStatus(remotePlayer, true, false);
+        }
     }
 
     removePlayer(id) {
@@ -164,18 +318,17 @@ export default class PlayerManager {
     }
 
     moveRemotePlayer(id, pos, anim) {
-        const container = this.players[id];
-        if (container) {
-            this.scene.tweens.killTweensOf(container); // Prevent overlaps from building up!
+        const remotePlayer = this.players[id];
+        if (remotePlayer) {
+            this.scene.tweens.killTweensOf(remotePlayer); // Prevent overlaps from building up!
             this.scene.tweens.add({
-                targets: container,
+                targets: remotePlayer,
                 x: pos.x,
                 y: pos.y,
                 duration: 120,
                 ease: "Linear",
             });
-            const sprite = container.getAt(0);
-            if (anim && sprite.anims) sprite.anims.play(anim, true);
+            if (anim && remotePlayer.sprite.anims) remotePlayer.sprite.anims.play(anim, true);
         }
     }
 
@@ -256,10 +409,69 @@ export default class PlayerManager {
                 }
             }
 
-            // 2. Computers -> Trigger Computer UI (Placeholder)
+            // 2. Computers -> Trigger Computer UI
             else if (interactable.type === 'computer') {
                 console.log("🖥️ Computer interaction triggered");
-                // window.dispatchEvent(new CustomEvent('open-computer', { ... }));
+
+                const computerId = String(interactable.id || `computer_${interactable.x}_${interactable.y}`);
+
+                const isMyDesk = String(this.assignedComputerId) === computerId;
+
+                // Desk ownership & Viewer check
+                if (!isMyDesk) {
+                    let isSomeoneElseWorking = false;
+                    for (let id in this.players) {
+                        const p = this.players[id];
+                        // 80 pixels is a generous radius to see if the host is actively near the computer
+                        if (p.workingText && Phaser.Math.Distance.Between(interactable.x, interactable.y, p.x, p.y) < 80) {
+                            isSomeoneElseWorking = true;
+                            break;
+                        }
+                    }
+
+                    if (!isSomeoneElseWorking) {
+                        if (!this.assignedComputerId) {
+                            this.showAccessDenied("Access Denied: No Desk Assigned", true);
+                        } else {
+                            this.showAccessDenied("Access Denied: Not Your Desk", true);
+                        }
+                        return;
+                    }
+
+                    // Store viewer tracking config
+                    this.viewerDeskId = computerId;
+                    this.viewerDeskInteractable = interactable;
+                } else {
+                    this.viewerDeskId = null;
+                    this.viewerDeskInteractable = null;
+                }
+
+                // Determine facing direction from custom property "dir"
+                const dirProp = interactable.rawProperties && interactable.rawProperties.find(p => p.name === "dir");
+                const computerDir = dirProp ? dirProp.value : "down";
+
+                let playerFacing = "up";
+                if (computerDir === "down") playerFacing = "up";
+                else if (computerDir === "up") playerFacing = "down";
+                else if (computerDir === "left") playerFacing = "right";
+                else if (computerDir === "right") playerFacing = "left";
+
+                this.currentAnimation = `idle-${playerFacing}`;
+                this.lastDirection = playerFacing;
+                this.player.anims.play(this.currentAnimation, true);
+                this.player.body.setVelocity(0);
+
+                this.isUsingComputer = true;
+                
+                // Only the true owner broadcasts "Working..." above their head to others
+                if (isMyDesk) {
+                    socketService.emitWorking(true);
+                    this.setWorkingStatus(this.player, true, true);
+                }
+
+                window.dispatchEvent(new CustomEvent('open-computer', { 
+                    detail: { computerId, viewerOnly: !isMyDesk } 
+                }));
             }
         }
     }
@@ -268,14 +480,28 @@ export default class PlayerManager {
         if (!this.player || !this.player.body) return;
 
         // Chat Focus check
-        if (this.inputManager.chatFocused) {
+        if (this.inputManager.chatFocused || this.isUsingComputer) {
             this.player.body.setVelocity(0);
             return;
         }
 
         // RBAC Check
         const access = this.mapManager.checkZoneAccess(this.player, myRole);
-        this.mapManager.updateImmersion(access.zone);
+        
+        let activeImmersionArea = access.zone;
+        
+        // Enhance Immersion: Fading the world when approaching Computer Tables
+        if (this.currentInteractable && this.currentInteractable.type === 'computer') {
+            activeImmersionArea = {
+                id: `computer_${this.currentInteractable.id || this.currentInteractable.x}`,
+                x: this.currentInteractable.x - 25,
+                y: this.currentInteractable.y - 25,
+                width: this.currentInteractable.width + 50,
+                height: this.currentInteractable.height + 60
+            };
+        }
+
+        this.mapManager.updateImmersion(activeImmersionArea);
 
         if (!access.allowed && access.zone) {
             const zone = access.zone;
@@ -332,23 +558,33 @@ export default class PlayerManager {
             }
         }
 
-        if (this.player.body.velocity.x < 0) {
-            this.currentAnimation = "walk-left";
-            this.lastDirection = "left";
-        } else if (this.player.body.velocity.x > 0) {
-            this.currentAnimation = "walk-right";
-            this.lastDirection = "right";
-        } else if (this.player.body.velocity.y < 0) {
-            this.currentAnimation = "walk-up";
-            this.lastDirection = "up";
-        } else if (this.player.body.velocity.y > 0) {
-            this.currentAnimation = "walk-down";
-            this.lastDirection = "down";
-        } else {
-            this.currentAnimation = `idle-${this.lastDirection}`;
+        // Cancel AutoWalk if player presses manual movement key
+        let isMovingManually = this.movement.left || this.movement.right || this.movement.up || this.movement.down;
+        if (this.isAutoWalking && isMovingManually) {
+            this.isAutoWalking = false;
+            this.player.body.checkCollision.none = false;
+            this.scene.tweens.killTweensOf(this.player);
         }
 
-        this.player.anims.play(this.currentAnimation, true);
+        if (!this.isAutoWalking) {
+            if (this.player.body.velocity.x < 0) {
+                this.currentAnimation = "walk-left";
+                this.lastDirection = "left";
+            } else if (this.player.body.velocity.x > 0) {
+                this.currentAnimation = "walk-right";
+                this.lastDirection = "right";
+            } else if (this.player.body.velocity.y < 0) {
+                this.currentAnimation = "walk-up";
+                this.lastDirection = "up";
+            } else if (this.player.body.velocity.y > 0) {
+                this.currentAnimation = "walk-down";
+                this.lastDirection = "down";
+            } else {
+                this.currentAnimation = `idle-${this.lastDirection}`;
+            }
+
+            this.player.anims.play(this.currentAnimation, true);
+        }
 
         // Calculate time for throttling
         const now = Date.now();
@@ -465,6 +701,60 @@ export default class PlayerManager {
             ease: "Power1",
             onComplete: () => emojiText.destroy()
         });
+    }
+
+    setWorkingStatus(entity, isWorking, isLocalPlayer) {
+        if (!entity) return;
+
+        if (isWorking) {
+            if (!entity.workingText) {
+                const text = this.scene.add.text(entity.x, entity.y - 48, "Working...", {
+                    fontFamily: 'Inter',
+                    fontSize: "10px", fill: "#60a5fa", fontStyle: "bold",
+                    backgroundColor: "#000000cc", padding: { x: 5, y: 3 }
+                }).setOrigin(0.5).setResolution(2).setDepth(100);
+
+                entity.workingText = text;
+            }
+            entity.workingText.setVisible(true);
+
+            this.scene.tweens.add({
+                targets: entity.workingText,
+                alpha: 0.5,
+                yoyo: true,
+                repeat: -1,
+                duration: 800
+            });
+        } else {
+            if (entity.workingText) {
+                this.scene.tweens.killTweensOf(entity.workingText);
+                entity.workingText.destroy();
+                entity.workingText = null;
+            }
+
+            // Spectator Kick-Out Logic
+            if (!isLocalPlayer && this.isUsingComputer && this.viewerDeskId && this.viewerDeskInteractable) {
+                const dist = Phaser.Math.Distance.Between(this.viewerDeskInteractable.x, this.viewerDeskInteractable.y, entity.x, entity.y);
+                
+                // If a player near the desk we're watching stops working...
+                if (dist < 80) {
+                    let someoneStillWorking = false;
+                    for (let id in this.players) {
+                        const p = this.players[id];
+                        if (p !== entity && p.workingText && Phaser.Math.Distance.Between(this.viewerDeskInteractable.x, this.viewerDeskInteractable.y, p.x, p.y) < 80) {
+                            someoneStillWorking = true;
+                            break;
+                        }
+                    }
+
+                    if (!someoneStillWorking) {
+                        // Everyone left! Evict viewer.
+                        window.dispatchEvent(new CustomEvent('close-computer-force'));
+                        this.showAccessDenied("Host left the desk", true);
+                    }
+                }
+            }
+        }
     }
 
     // --- Mobile Joystick ---

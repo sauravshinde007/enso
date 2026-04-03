@@ -6,7 +6,8 @@ import {
     getAllUsers,
     updateUserRole,
     getMetaverseUsers,
-    updateProfile
+    updateProfile,
+    assignComputer
 } from '../controllers/userController.js';
 
 const router = express.Router();
@@ -14,6 +15,7 @@ const router = express.Router();
 // 👑 ADMIN Routes
 router.get('/all', jwtAuthMiddleware, checkAdmin, getAllUsers);
 router.put('/:id/role', jwtAuthMiddleware, checkAdmin, updateUserRole);
+router.put('/:id/computer', jwtAuthMiddleware, checkAdmin, assignComputer);
 
 // User Routes
 router.get('/', jwtAuthMiddleware, getMetaverseUsers);

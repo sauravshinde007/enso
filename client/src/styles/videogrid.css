@@ -12,12 +12,26 @@
   align-items: flex-start;
   gap: 12px;
 
-  z-index: 110;
+  z-index: 5000;
   width: 100%;
   max-width: 1200px;
   pointer-events: none;
   /* Let clicks pass through empty areas */
   padding: 0 20px;
+
+  /* Smooth transition for layout changing */
+  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Shift VideoGrid to a vertical sidebar format when viewing Computer Share */
+body.computer-modal-open .remote-video-grid-container {
+  left: auto;
+  right: 20px;
+  transform: none;
+  width: auto;
+  flex-direction: column;
+  align-items: flex-end;
+  padding: 0;
 }
 
 .video-container {
@@ -34,10 +48,16 @@
   pointer-events: auto;
   /* Re-enable clicks on videos */
 
-  /* Animation for entering items */
+  /* Animation for entering items and changing size */
   animation: fadeIn 0.3s ease-out forwards;
+  transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1);
   opacity: 0;
   transform-origin: center top;
+}
+
+/* Smaller thumbnails when viewing Computer Share */
+body.computer-modal-open .video-container {
+  width: 180px;
 }
 
 .video-container.exiting {
@@ -119,6 +139,21 @@
     bottom: 4px;
     left: 4px;
   }
+
+  /* Move VideoGrid back to top-center above the Computer Screen on narrower devices where space permits */
+  body.computer-modal-open .remote-video-grid-container {
+    left: 50%;
+    right: auto;
+    transform: translateX(-50%);
+    width: 100%;
+    flex-direction: row;
+    justify-content: center;
+    align-items: flex-start;
+  }
+
+  body.computer-modal-open .video-container {
+    width: 140px;
+  }
 }
 
 @media (max-width: 480px) {
@@ -130,5 +165,10 @@
     width: 45%;
     /* 2 per row roughly */
     min-width: 140px;
+  }
+
+  body.computer-modal-open .video-container {
+    width: 100px;
+    min-width: unset;
   }
 }

@@ -16,6 +16,7 @@ import ZoomControls from "../components/ZoomControls"; // Import
 
 import Minimap from "../components/Minimap"; // Import
 import MeetingModal from "../components/MeetingModal"; // Import meeting modal
+import ComputerModal from "../components/ComputerModal"; // Import computer modal
 import FPSCounter from "../components/FPSCounter"; // Import FPS Counter
 import { NotificationDisplay } from "../context/NotificationContext"; // Import Notifications
 
@@ -68,6 +69,9 @@ function Metaverse() {
 
                 {/* Meeting Room Modal */}
                 <MeetingModal />
+
+                {/* Computer UI Modal */}
+                <ComputerModal />
 
                 {/* 4. Pass the state and setter down to the controls */}
                 <VoiceChat

@@ -7,9 +7,17 @@ class PeerService {
     this.localStream = null;
     this.activeCalls = new Map(); // Map of peerId -> call object
     this.remoteStreams = new Map(); // Map of peerId -> remote stream
+    
+    // Screen sharing
+    this.screenStream = null;
+    this.activeScreenCalls = new Map(); // incoming view requests from others
+    this.viewingScreenCall = null; // when we view someone else's screen
+    this.viewingScreenStream = null; // someone else's screen stream
+
     this.streamReceivedListeners = new Set();
     this.callEndedListeners = new Set();
     this.localStreamListeners = new Set();
+    this.screenViewStreamListeners = new Set(); // to notify UI of incoming screen stream
   }
 
 
@@ -217,6 +225,27 @@ class PeerService {
    * @param {Object} call - PeerJS call object
    */
   handleIncomingCall(call) {
+    // If it's a screen viewing request
+    if (call.metadata && call.metadata.type === 'screen-view') {
+      console.log('👀 Incoming screen view request from:', call.peer);
+      if (this.screenStream) {
+        // We are currently sharing out screen, answer with it
+        call.answer(this.screenStream);
+        this.activeScreenCalls.set(call.peer, call);
+        call.on('close', () => {
+          this.activeScreenCalls.delete(call.peer);
+        });
+        call.on('error', () => {
+          this.activeScreenCalls.delete(call.peer);
+        });
+      } else {
+        // Reject it
+        console.warn("Screen view request received but we are not sharing a screen");
+        call.close();
+      }
+      return;
+    }
+
     if (!this.localStream) {
       console.error('No local stream available to answer call');
       return;
@@ -254,6 +283,85 @@ class PeerService {
       this.remoteStreams.delete(callerPeerId);
     });
   }
+
+  // ============== SCREEN SHARING =================
+
+  async startScreenShare() {
+     try {
+       this.screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+       
+       // Handle when user clicks "Stop Sharing" on the native browser bar
+       this.screenStream.getVideoTracks()[0].onended = () => {
+           this.stopScreenShare();
+       };
+
+       return this.screenStream;
+     } catch (err) {
+       console.error("Failed to get display media:", err);
+       this.screenStream = null;
+       throw err;
+     }
+  }
+
+  stopScreenShare() {
+    if (this.screenStream) {
+       this.screenStream.getTracks().forEach(track => track.stop());
+       this.screenStream = null;
+    }
+    // Close all viewers
+    this.activeScreenCalls.forEach(call => call.close());
+    this.activeScreenCalls.clear();
+  }
+
+  viewScreen(hostPeerId, onStream) {
+    if (!this.peer || this.peer.disconnected) {
+       console.error("PeerJS not connected, cannot view screen");
+       return null;
+    }
+
+    // Generate a dummy canvas stream if we don't have local stream to send
+    let sendStream = this.localStream;
+    if (!sendStream) {
+       const canvas = document.createElement("canvas");
+       canvas.width = 1; canvas.height = 1;
+       sendStream = canvas.captureStream(1);
+    }
+
+    const call = this.peer.call(hostPeerId, sendStream, { metadata: { type: 'screen-view' } });
+    this.viewingScreenCall = call;
+
+    call.on('stream', (stream) => {
+       console.log("Receiving screen stream from", hostPeerId);
+       this.viewingScreenStream = stream;
+       if (onStream) onStream(stream);
+    });
+
+    call.on('close', () => {
+       console.log("Screen share viewing ended");
+       this.viewingScreenCall = null;
+       this.viewingScreenStream = null;
+       if (onStream) onStream(null);
+    });
+
+    call.on('error', (err) => {
+       console.error("Screen view call error", err);
+       this.viewingScreenCall = null;
+       this.viewingScreenStream = null;
+       if (onStream) onStream(null);
+    });
+
+    return call;
+  }
+
+  stopViewingScreen() {
+    if (this.viewingScreenCall) {
+       this.viewingScreenCall.close();
+       this.viewingScreenCall = null;
+    }
+    this.viewingScreenStream = null;
+  }
+
+  // ===============================================
 
   /**
    * End call with a specific peer

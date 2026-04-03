@@ -19,7 +19,8 @@ const userSchema = new mongoose.Schema({
   resetPasswordToken: { type: String, default: null },
   resetPasswordExpires: { type: Date, default: null },
   lastX: { type: Number, default: 1162 },
-  lastY: { type: Number, default: 1199 }
+  lastY: { type: Number, default: 1199 },
+  assignedComputerId: { type: String, default: null }
 }, { timestamps: true });
 
 const User = mongoose.model('User', userSchema);

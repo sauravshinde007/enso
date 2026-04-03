@@ -92,7 +92,7 @@ export default function UserSettingsModal({ isOpen, onClose, onNotificationsView
                         headers: { Authorization: `Bearer ${token}` }
                     });
                     setUpcomingMeetings(res.data.notifications || []);
-                    
+
                     // If there are unseen notifications, mark them seen
                     const hasUnseen = res.data.notifications.some(n => !n.seen);
                     if (hasUnseen) {
@@ -524,7 +524,7 @@ export default function UserSettingsModal({ isOpen, onClose, onNotificationsView
                                     ) : activeTab === 'meetings' ? (
                                         <div className="mb-8">
                                             <h2 className="text-[16px] font-bold text-gray-900 mb-1">Meetings History</h2>
-                                            <p className="text-[13px] text-gray-500">View all the Daily.co meetings you have attended in the metaverse.</p>
+                                            <p className="text-[13px] text-gray-500">View all meetings you have attended in the metaverse.</p>
 
                                             <div className="mt-8 space-y-4">
                                                 {loadingHistory ? (
@@ -598,7 +598,7 @@ export default function UserSettingsModal({ isOpen, onClose, onNotificationsView
                                             {/* Dialog Box Modal for Transcript & MOM */}
                                             {(viewMomContent || viewTranscriptContent) && (
                                                 <div className="fixed inset-0 z-[3000] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-                                                    <motion.div 
+                                                    <motion.div
                                                         initial={{ opacity: 0, scale: 0.95, y: 10 }}
                                                         animate={{ opacity: 1, scale: 1, y: 0 }}
                                                         exit={{ opacity: 0, scale: 0.95, y: 10 }}
@@ -610,8 +610,8 @@ export default function UserSettingsModal({ isOpen, onClose, onNotificationsView
                                                                 <FileText size={20} className={viewMomContent ? "text-[#136c50]" : "text-gray-700"} />
                                                                 {viewMomContent ? "Minutes of Meeting" : "Full Meeting Transcript"}
                                                             </h3>
-                                                            <button 
-                                                                onClick={() => { setViewMomContent(null); setViewTranscriptContent(null); }} 
+                                                            <button
+                                                                onClick={() => { setViewMomContent(null); setViewTranscriptContent(null); }}
                                                                 className="p-1.5 bg-white border border-gray-200 rounded-lg text-gray-500 hover:text-gray-900 hover:bg-gray-50 shadow-sm transition-colors"
                                                             >
                                                                 <X size={18} />
@@ -647,8 +647,8 @@ export default function UserSettingsModal({ isOpen, onClose, onNotificationsView
 
                                                         {/* Footer Action */}
                                                         <div className="p-5 border-t border-gray-100 bg-gray-50/80 flex justify-end">
-                                                            <button 
-                                                                onClick={() => { setViewMomContent(null); setViewTranscriptContent(null); }} 
+                                                            <button
+                                                                onClick={() => { setViewMomContent(null); setViewTranscriptContent(null); }}
                                                                 className="px-5 py-2.5 font-medium text-white bg-black rounded-xl hover:bg-gray-800 transition-colors shadow-sm text-sm"
                                                             >
                                                                 Close
@@ -696,7 +696,7 @@ export default function UserSettingsModal({ isOpen, onClose, onNotificationsView
                                                                         </div>
                                                                     )}
                                                                     {notification.relatedId && notification.relatedId.roomName && (
-                                                                        <button 
+                                                                        <button
                                                                             onClick={() => {
                                                                                 window.dispatchEvent(new CustomEvent('teleport-player', { detail: { zoneId: notification.relatedId.roomName } }));
                                                                                 onClose();

@@ -57,6 +57,9 @@ export default class NetworkManager {
                         console.log("👮 My Role is:", this.myRole);
                         this.mapManager.updateZoneVisuals(this.myRole);
                     }
+                    if (p.assignedComputerId !== undefined) {
+                        this.playerManager.assignedComputerId = p.assignedComputerId;
+                    }
                 }
             });
         };
@@ -116,6 +119,22 @@ export default class NetworkManager {
             }
         };
         socketService.onPlayerReaction(this.socketHandlers.onPlayerReaction);
+
+        // Working Status
+        this.socketHandlers.onPlayerWorking = ({ id, isWorking }) => {
+            if (!this.scene.sys.isActive()) return;
+            let entity = null;
+            if (id === socketService.socket.id) {
+                entity = this.playerManager.player;
+            } else {
+                entity = this.playerManager.players[id];
+            }
+
+            if (entity) {
+                this.playerManager.setWorkingStatus(entity, isWorking, id === socketService.socket.id);
+            }
+        };
+        socketService.onPlayerWorking(this.socketHandlers.onPlayerWorking);
 
         // Proximity Calls
         this.socketHandlers.onInitiateProximityCalls = (data) => {
@@ -284,6 +303,7 @@ export default class NetworkManager {
         if (this.socketHandlers.onPlayerLeft) socketService.off("playerLeft", this.socketHandlers.onPlayerLeft);
         if (this.socketHandlers.onInitiateProximityCalls) socketService.off("initiateProximityCalls", this.socketHandlers.onInitiateProximityCalls);
         if (this.socketHandlers.onPlayerReaction) socketService.off("playerReaction", this.socketHandlers.onPlayerReaction);
+        if (this.socketHandlers.onPlayerWorking) socketService.off("playerWorking", this.socketHandlers.onPlayerWorking);
 
         this.socketHandlers = {};
         if (this.movementInterval) clearInterval(this.movementInterval);

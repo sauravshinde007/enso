@@ -5,7 +5,7 @@ import { syncUserToStream } from '../services/streamService.js';
 
 export const getAllUsers = async (req, res) => {
     try {
-        const users = await User.find({}, 'username email role avatar _id');
+        const users = await User.find({}, 'username email role avatar assignedComputerId _id');
         res.json(users);
     } catch (err) {
         console.error("Admin fetch users error:", err);
@@ -33,6 +33,32 @@ export const updateUserRole = async (req, res) => {
         res.json({ message: `User role updated to ${role}`, user });
     } catch (err) {
         console.error("Admin update role error:", err);
+        res.status(500).json({ message: "Server error" });
+    }
+};
+
+export const assignComputer = async (req, res) => {
+    try {
+        const { computerId } = req.body;
+        const user = await User.findById(req.params.id);
+        
+        if (!user) {
+            return res.status(404).json({ message: "User not found" });
+        }
+
+        if (computerId) {
+            const existingUser = await User.findOne({ assignedComputerId: computerId });
+            if (existingUser && existingUser._id.toString() !== user._id.toString()) {
+                return res.status(400).json({ message: `Computer currently assigned to ${existingUser.username}` });
+            }
+        }
+
+        user.assignedComputerId = computerId || null;
+        await user.save();
+
+        res.json({ message: `Computer ${computerId || 'cleared'} assigned to user`, user });
+    } catch (err) {
+        console.error("Admin assign computer error:", err);
         res.status(500).json({ message: "Server error" });
     }
 };

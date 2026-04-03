@@ -8,6 +8,9 @@ export default (io) => {
   // id -> player state
   const players = Object.create(null);
 
+  // computerId -> { socketId, peerId, username }
+  const computerScreens = Object.create(null);
+
   io.on("connection", (socket) => {
     console.log("New connection:", socket.id);
 
@@ -79,6 +82,7 @@ export default (io) => {
           videoEnabled: existingPlayer ? existingPlayer.videoEnabled : false,
           nearbyPlayers: [],
           role: userRole,
+          assignedComputerId: user.assignedComputerId || null,
         };
 
         // Send full state to the new player
@@ -175,6 +179,42 @@ export default (io) => {
       io.emit("playerReaction", { id: socket.id, emoji });
     });
 
+    // Broadcast working status
+    socket.on("working", (isWorking) => {
+      const p = players[socket.id];
+      if (!p) return;
+      p.isWorking = !!isWorking;
+      socket.broadcast.emit("playerWorking", { id: socket.id, isWorking: p.isWorking });
+    });
+
+    // Computer Screen Sharing Methods
+    socket.on("checkComputer", (computerId) => {
+      socket.emit("computerScreenState", computerScreens[computerId] || null);
+    });
+
+    socket.on("startComputerScreen", (data) => {
+      const { computerId, peerId } = data;
+      const p = players[socket.id];
+      if (!p) return;
+      
+      // If not already shared, allow sharing
+      if (!computerScreens[computerId]) {
+        computerScreens[computerId] = {
+          socketId: socket.id,
+          peerId: peerId,
+          username: p.username
+        };
+        io.emit("computerScreenStarted", { computerId, state: computerScreens[computerId] });
+      }
+    });
+
+    socket.on("stopComputerScreen", (computerId) => {
+      if (computerScreens[computerId] && computerScreens[computerId].socketId === socket.id) {
+        delete computerScreens[computerId];
+        io.emit("computerScreenStopped", { computerId });
+      }
+    });
+
     socket.on("disconnect", async () => {
       const p = players[socket.id];
       if (!p) {
@@ -237,6 +277,14 @@ export default (io) => {
       } catch (error) {
         console.error("Error clearing socketId on disconnect:", error);
       }
+
+      // Cleanup computer screens if user was sharing
+      Object.keys(computerScreens).forEach((compId) => {
+        if (computerScreens[compId].socketId === socket.id) {
+          delete computerScreens[compId];
+          io.emit("computerScreenStopped", { computerId: compId });
+        }
+      });
 
       delete players[socket.id];
       io.emit("playerLeft", socket.id);
