@@ -29,13 +29,14 @@ export default class PlayerManager {
 
         // Interaction UI
         this.interactionText = null;
-        // Interaction UI
-        this.interactionText = null;
         this.currentInteractable = null;
 
         this.isInMeeting = false;
         this.isUsingComputer = false;
         this.isAutoWalking = false;
+
+        this.viewerDeskId = null;
+        this.viewerDeskInteractable = null;
 
         // Events
         this.scene.events.on("gameInput", (input) => this.handleGameInput(input));
@@ -50,6 +51,8 @@ export default class PlayerManager {
             if (this.player) {
                 this.setWorkingStatus(this.player, false, true);
             }
+            this.viewerDeskId = null;
+            this.viewerDeskInteractable = null;
             console.log("🖥️ Computer interaction closed");
         });
 
@@ -412,15 +415,35 @@ export default class PlayerManager {
 
                 const computerId = String(interactable.id || `computer_${interactable.x}_${interactable.y}`);
 
-                // Desk ownership check
-                if (!this.assignedComputerId) {
-                    this.showAccessDenied("Access Denied: No Desk Assigned", true);
-                    return;
-                }
+                const isMyDesk = String(this.assignedComputerId) === computerId;
 
-                if (String(this.assignedComputerId) !== computerId) {
-                    this.showAccessDenied("Access Denied: Not Your Desk", true);
-                    return;
+                // Desk ownership & Viewer check
+                if (!isMyDesk) {
+                    let isSomeoneElseWorking = false;
+                    for (let id in this.players) {
+                        const p = this.players[id];
+                        // 80 pixels is a generous radius to see if the host is actively near the computer
+                        if (p.workingText && Phaser.Math.Distance.Between(interactable.x, interactable.y, p.x, p.y) < 80) {
+                            isSomeoneElseWorking = true;
+                            break;
+                        }
+                    }
+
+                    if (!isSomeoneElseWorking) {
+                        if (!this.assignedComputerId) {
+                            this.showAccessDenied("Access Denied: No Desk Assigned", true);
+                        } else {
+                            this.showAccessDenied("Access Denied: Not Your Desk", true);
+                        }
+                        return;
+                    }
+
+                    // Store viewer tracking config
+                    this.viewerDeskId = computerId;
+                    this.viewerDeskInteractable = interactable;
+                } else {
+                    this.viewerDeskId = null;
+                    this.viewerDeskInteractable = null;
                 }
 
                 // Determine facing direction from custom property "dir"
@@ -439,10 +462,15 @@ export default class PlayerManager {
                 this.player.body.setVelocity(0);
 
                 this.isUsingComputer = true;
-                socketService.emitWorking(true);
-                this.setWorkingStatus(this.player, true, true);
+                
+                // Only the true owner broadcasts "Working..." above their head to others
+                if (isMyDesk) {
+                    socketService.emitWorking(true);
+                    this.setWorkingStatus(this.player, true, true);
+                }
+
                 window.dispatchEvent(new CustomEvent('open-computer', { 
-                    detail: { computerId } 
+                    detail: { computerId, viewerOnly: !isMyDesk } 
                 }));
             }
         }
@@ -459,7 +487,21 @@ export default class PlayerManager {
 
         // RBAC Check
         const access = this.mapManager.checkZoneAccess(this.player, myRole);
-        this.mapManager.updateImmersion(access.zone);
+        
+        let activeImmersionArea = access.zone;
+        
+        // Enhance Immersion: Fading the world when approaching Computer Tables
+        if (this.currentInteractable && this.currentInteractable.type === 'computer') {
+            activeImmersionArea = {
+                id: `computer_${this.currentInteractable.id || this.currentInteractable.x}`,
+                x: this.currentInteractable.x - 25,
+                y: this.currentInteractable.y - 25,
+                width: this.currentInteractable.width + 50,
+                height: this.currentInteractable.height + 60
+            };
+        }
+
+        this.mapManager.updateImmersion(activeImmersionArea);
 
         if (!access.allowed && access.zone) {
             const zone = access.zone;
@@ -688,6 +730,29 @@ export default class PlayerManager {
                 this.scene.tweens.killTweensOf(entity.workingText);
                 entity.workingText.destroy();
                 entity.workingText = null;
+            }
+
+            // Spectator Kick-Out Logic
+            if (!isLocalPlayer && this.isUsingComputer && this.viewerDeskId && this.viewerDeskInteractable) {
+                const dist = Phaser.Math.Distance.Between(this.viewerDeskInteractable.x, this.viewerDeskInteractable.y, entity.x, entity.y);
+                
+                // If a player near the desk we're watching stops working...
+                if (dist < 80) {
+                    let someoneStillWorking = false;
+                    for (let id in this.players) {
+                        const p = this.players[id];
+                        if (p !== entity && p.workingText && Phaser.Math.Distance.Between(this.viewerDeskInteractable.x, this.viewerDeskInteractable.y, p.x, p.y) < 80) {
+                            someoneStillWorking = true;
+                            break;
+                        }
+                    }
+
+                    if (!someoneStillWorking) {
+                        // Everyone left! Evict viewer.
+                        window.dispatchEvent(new CustomEvent('close-computer-force'));
+                        this.showAccessDenied("Host left the desk", true);
+                    }
+                }
             }
         }
     }

@@ -12,6 +12,7 @@ const ComputerModal = () => {
         hostName: null,
         stream: null
     });
+    const [viewerOnly, setViewerOnly] = useState(false);
     const videoRef = useRef(null);
 
     // Toggle body class for VideoGrid layout shifting
@@ -30,7 +31,9 @@ const ComputerModal = () => {
     useEffect(() => {
         const handleOpen = (e) => {
             const compId = e.detail?.computerId;
+            const isViewer = e.detail?.viewerOnly || false;
             setComputerId(compId);
+            setViewerOnly(isViewer);
             setIsOpen(true);
             
             // Check current status of this computer
@@ -43,6 +46,10 @@ const ComputerModal = () => {
             if (e.key === "Escape" && isOpen) {
                 handleClose();
             }
+        };
+
+        const handleForceClose = () => {
+            handleClose();
         };
 
         const onState = (state) => {
@@ -81,6 +88,7 @@ const ComputerModal = () => {
 
         window.addEventListener("open-computer", handleOpen);
         window.addEventListener("keydown", handleEscape);
+        window.addEventListener("close-computer-force", handleForceClose);
         
         socketService.on("computerScreenState", onState);
         socketService.on("computerScreenStarted", onStart);
@@ -89,6 +97,7 @@ const ComputerModal = () => {
         return () => {
             window.removeEventListener("open-computer", handleOpen);
             window.removeEventListener("keydown", handleEscape);
+            window.removeEventListener("close-computer-force", handleForceClose);
             socketService.off("computerScreenState", onState);
             socketService.off("computerScreenStarted", onStart);
             socketService.off("computerScreenStopped", onStop);
@@ -159,7 +168,7 @@ const ComputerModal = () => {
                             </div>
                             
                             <div className="flex items-center gap-4">
-                                {shareState.status === 'idle' && (
+                                {shareState.status === 'idle' && !viewerOnly && (
                                    <button 
                                       onClick={handleStartShare}
                                       className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-medium text-sm flex items-center gap-2 transition"
@@ -203,7 +212,11 @@ const ComputerModal = () => {
                                     <p className="text-green-500 mb-3 select-none">► System initialized.</p>
                                     <p className="text-gray-400 mb-3 select-none">► Connecting to secure intranet...</p>
                                     <p className="text-gray-400 mb-6 select-none">► Connection established. Welcome, User.</p>
-                                    <p className="text-indigo-400 mb-3 select-none block">► Click "Share Screen" to broadcast your display to this terminal.</p>
+                                    {!viewerOnly ? (
+                                        <p className="text-indigo-400 mb-3 select-none block">► Click "Share Screen" to broadcast your display to this terminal.</p>
+                                    ) : (
+                                        <p className="text-indigo-400 mb-3 select-none block animate-pulse">► Waiting for host to broadcast display over the terminal...</p>
+                                    )}
                                     
                                     <div className="animate-pulse flex items-center gap-2 text-blue-400 mt-4 select-none">
                                         <span className="w-2.5 h-5 bg-blue-500 block"></span>
