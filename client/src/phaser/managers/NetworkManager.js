@@ -196,7 +196,15 @@ export default class NetworkManager {
 
             if (!this.currentNearbyPlayers.has(p.id)) {
                 if (peerService.peer) {
-                    peerService.callPeer(p.id);
+                    // Prevent glare by only letting one side initiate the call
+                    const myId = peerService.peer.id;
+                    const theirId = peerService.getPeerId(p.id);
+                    
+                    if (myId > theirId) {
+                        peerService.callPeer(p.id);
+                    } else {
+                        console.log(`Waiting for ${theirId} to initiate call to us (${myId}) to prevent glare.`);
+                    }
                     this.currentNearbyPlayers.add(p.id);
                 }
             }

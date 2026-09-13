@@ -127,7 +127,7 @@ export default class PlayerManager {
                 const data = await res.json();
                 if (data.blockedZones) {
                     this.mapManager.dynamicBlockedZones = data.blockedZones;
-                    this.mapManager.updateZoneVisuals(this.player ? this.player.role : 'employee');
+                    this.mapManager.updateZoneVisuals(this.currentRole || 'employee');
                 }
             } catch (err) { }
         }, 5000);
@@ -478,6 +478,8 @@ export default class PlayerManager {
 
     update(myRole) {
         if (!this.player || !this.player.body) return;
+        
+        this.currentRole = myRole;
 
         // Chat Focus check
         if (this.inputManager.chatFocused || this.isUsingComputer) {

@@ -34,6 +34,59 @@ Stay oriented with a real-time minimap. Locate team members instantly across the
 
 ---
 
+## Getting Started
+
+Follow these instructions to set up and run the project locally.
+
+### Prerequisites
+- **Node.js**: Ensure you have Node.js (v16+) installed.
+- **MongoDB**: A running instance of MongoDB (locally or via MongoDB Atlas).
+- **Redis**: A running instance of Redis (required for BullMQ background jobs).
+
+### Installation & Execution
+
+1. **Clone the repository:**
+   ```bash
+   git clone <your-repo-url>
+   cd enso
+   ```
+
+2. **Start Redis Server:**
+   Ensure your Redis server is running locally on the default port (6379) or configure it in your `.env`.
+   ```bash
+   redis-server
+   ```
+
+3. **Start the Backend Server:**
+   Open a new terminal tab/window:
+   ```bash
+   cd server
+   npm install
+   # Ensure you configure your .env file with MONGO_URI, REDIS_URL, etc.
+   npm run dev
+   ```
+
+4. **Start the Transcription Agent:**
+   Open a new terminal tab/window:
+   ```bash
+   cd server
+   npm run agent
+   ```
+
+5. **Start the Frontend Client:**
+   Open a new terminal tab/window:
+   ```bash
+   cd client
+   npm install
+   # Ensure you configure your .env file with the server URL if needed
+   npm run dev
+   ```
+
+4. **Access the Application:**
+   Open your browser and navigate to `http://localhost:3000` (or the respective port your React app runs on).
+
+---
+
 ## Built With
 
 Engineered for performance and scalability using a modern tech stack:

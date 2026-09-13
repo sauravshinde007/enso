@@ -43,8 +43,8 @@ const VideoPlayer = ({ stream, peerId, isVideoEnabledBySignaling, isExiting, onV
       // 1. Track exists
       // 2. Track is not muted (WebRTC level)
       // 3. Signaling says it should be enabled (Server level truth)
-      const isVideoActive = videoTrack && !videoTrack.muted && isVideoEnabledBySignaling;
-
+      const isVideoActive = !!(videoTrack && !videoTrack.muted && isVideoEnabledBySignaling);
+      
       setHasVideo(prev => {
         if (prev !== isVideoActive) {
           return isVideoActive;
@@ -168,17 +168,54 @@ export default function VideoGrid({ isVideoEnabled }) {
       }));
     };
 
-    socketService.onPlayerVideoStatus(handleVideoStatus);
+    const handlePlayers = (players) => {
+      setVideoStatusMap(prev => {
+        const next = { ...prev };
+        for (const [id, player] of Object.entries(players)) {
+          next[peerService.getPeerId(id)] = player.videoEnabled;
+        }
+        return next;
+      });
+    };
+
+    const handlePlayerJoined = (player) => {
+      const peerId = peerService.getPeerId(player.id);
+      setVideoStatusMap(prev => ({
+        ...prev,
+        [peerId]: player.videoEnabled
+      }));
+    };
+
+    // Use direct 'on' and 'off' from socketService
+    socketService.on("playerVideoStatus", handleVideoStatus);
+    socketService.on("players", handlePlayers);
+    socketService.on("playerJoined", handlePlayerJoined);
+
+    // Initial load check if globalPlayers are already available in socketService
+    if (socketService.getGlobalPlayers) {
+        const currentPlayers = socketService.getGlobalPlayers();
+        if (currentPlayers && Object.keys(currentPlayers).length > 0) {
+            handlePlayers(currentPlayers);
+        }
+    }
 
     return () => {
-      // socketService.offPlayerVideoStatus(handleVideoStatus);
+      socketService.off("playerVideoStatus", handleVideoStatus);
+      socketService.off("players", handlePlayers);
+      socketService.off("playerJoined", handlePlayerJoined);
     };
   }, []);
 
   useEffect(() => {
+    let lastSize = 0;
     const update = () => {
       // Get current active streams from service
-      const activeData = peerService.getRemoteStreams().slice(0, MAX_REMOTE_VIDEOS);
+      const allRemoteStreams = peerService.getRemoteStreams();
+      const currentSize = allRemoteStreams.length;
+      
+      lastSize = currentSize;
+
+      const activeData = allRemoteStreams.slice(0, MAX_REMOTE_VIDEOS);
       const activeMap = new Map(activeData); // peerId -> stream
 
       setDisplayStreams(prev => {
@@ -234,6 +271,15 @@ export default function VideoGrid({ isVideoEnabled }) {
             hasChanges = true;
           }
         });
+
+        // Debugging info
+        if (activeMap.size > 0) {
+            console.log("VideoGrid Update:", {
+                activeStreamsCount: activeMap.size,
+                displayStreamsCount: next.length,
+                videoStatusMapKeys: Object.keys(videoStatusMap), // THIS IS BUGGY BECAUSE OF CLOSURE!
+            });
+        }
 
         return hasChanges ? next : prev;
       });

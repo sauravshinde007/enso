@@ -130,6 +130,19 @@ class PeerService {
    * Get user's media stream (audio/video)
    * @param {Object} constraints - MediaStream constraints object (e.g., { audio: true, video: { ... } })
    */
+  _createDummyVideoTrack() {
+    const canvas = document.createElement('canvas');
+    canvas.width = 1;
+    canvas.height = 1;
+    const ctx = canvas.getContext('2d');
+    ctx.fillRect(0, 0, 1, 1);
+    const stream = canvas.captureStream(1);
+    const track = stream.getVideoTracks()[0];
+    // Tag the placeholder track so we don't mistake it for a real camera track
+    track._isPlaceholder = true;
+    return track;
+  }
+
   async getUserMedia(constraints) {
     try {
       console.log('Requesting media with constraints:', constraints);
@@ -140,6 +153,13 @@ class PeerService {
       }
 
       this.localStream = await navigator.mediaDevices.getUserMedia(constraints);
+      
+      // Always ensure we have a video track for WebRTC renegotiation avoidance
+      if (this.localStream.getVideoTracks().length === 0) {
+        console.log('Adding dummy video track to allow mid-call toggling');
+        const dummyTrack = this._createDummyVideoTrack();
+        this.localStream.addTrack(dummyTrack);
+      }
 
       console.log('✅ Local media stream obtained');
       console.log('Audio tracks:', this.localStream.getAudioTracks().length);
@@ -164,6 +184,11 @@ class PeerService {
       console.error('❌ Failed to get user media:', error);
       console.error('Error name:', error.name);
       console.error('Error message:', error.message);
+      
+      if (error.name === 'NotReadableError' || error.name === 'TrackStartError') {
+        throw new Error('CAMERA_IN_USE: Your camera appears to be in use by another application or browser tab.');
+      }
+      
       throw error;
     }
   }
@@ -428,7 +453,9 @@ class PeerService {
 
     if (enabled) {
       const existingTrack = this.localStream.getVideoTracks()[0];
-      if (existingTrack && existingTrack.readyState === 'live') {
+      // Only short-circuit if the existing track is live AND it's a real camera track.
+      // If it's a placeholder, we must fetch the real camera track and replace it.
+      if (existingTrack && existingTrack.readyState === 'live' && !existingTrack._isPlaceholder) {
         existingTrack.enabled = true;
         this.notifyLocalStreamListeners();
         return;
@@ -437,6 +464,14 @@ class PeerService {
       try {
         const tempStream = await navigator.mediaDevices.getUserMedia({ video: true });
         const newVideoTrack = tempStream.getVideoTracks()[0];
+        
+        // Remove the old placeholder or stopped tracks
+        const oldTracks = this.localStream.getVideoTracks();
+        oldTracks.forEach(t => {
+          t.stop();
+          this.localStream.removeTrack(t);
+        });
+
         this.localStream.addTrack(newVideoTrack);
 
         // Update peer connections
@@ -452,6 +487,11 @@ class PeerService {
         track.stop();
         this.localStream.removeTrack(track);
       });
+      
+      const dummyTrack = this._createDummyVideoTrack();
+      this.localStream.addTrack(dummyTrack);
+      this.updateSenders('video', dummyTrack);
+      
       this.notifyLocalStreamListeners();
     }
   }
@@ -569,7 +609,8 @@ class PeerService {
         if (sender) {
           sender.replaceTrack(newTrack).catch(e => console.error(`Replace ${kind} track failed`, e));
         } else {
-          // Special handling for adding track if missing sender... won't do for now.
+          console.warn(`No sender found for ${kind} track, adding new track to peer connection.`);
+          call.peerConnection.addTrack(newTrack, this.localStream);
         }
       }
     });

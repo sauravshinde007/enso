@@ -260,7 +260,7 @@ export default class MapManager {
                 }
 
                 allowedRoles = allowedRoles || [];
-                const canAccess = allowedRoles.includes(myRole);
+                const canAccess = allowedRoles.length === 0 || allowedRoles.includes(myRole);
 
                 if (!canAccess) {
                     return { allowed: false, zone, isReserved: false };

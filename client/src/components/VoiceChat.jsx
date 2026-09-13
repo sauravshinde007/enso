@@ -119,7 +119,9 @@ export default function VoiceChat({ isVideoEnabled, setIsVideoEnabled }) {
       console.log('✅ Media enabled via UI');
     } catch (error) {
       console.error('Failed to enable media:', error);
-      if (error.name === 'NotAllowedError') {
+      if (error.message && error.message.startsWith('CAMERA_IN_USE')) {
+        alert('Your camera seems to be in use by another app or browser tab. Close other apps/tabs using it and try again.');
+      } else if (error.name === 'NotAllowedError') {
         alert('Media permissions denied. Please allow access in your browser settings.');
       } else if (error.name === 'NotFoundError') {
         alert('No microphone or camera found.');
