@@ -122,12 +122,8 @@ const socketService = {
     socket?.on("playerLeft", callback);
   },
 
-  onInitiateProximityCalls(callback) {
-    socket?.on("initiateProximityCalls", callback);
-  },
-
-  onPlayerInProximity(callback) {
-    socket?.on("playerInProximity", callback);
+  onProximityPeers(callback) {
+    socket?.on("proximityPeers", callback);
   },
 
   onPlayerVideoStatus(callback) {

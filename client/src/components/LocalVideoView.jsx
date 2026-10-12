@@ -1,7 +1,7 @@
 // client/src/components/LocalVideoView.jsx
 import React, { useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
-import peerService from '../services/peerService';
+import proximityService from '../services/proximityService';
 import '../styles/localvideoview.css';
 
 export default function LocalVideoView({ isVisible }) {
@@ -9,11 +9,11 @@ export default function LocalVideoView({ isVisible }) {
   const containerRef = useRef(null); // Ref for constraints if needed
 
   useEffect(() => {
-    if (isVisible && peerService.localStream) {
+    if (isVisible && proximityService.localStream) {
       // Create a new stream with ONLY the video track
       // This is crucial to prevent audio feedback
       const videoStream = new MediaStream(
-        peerService.localStream.getVideoTracks()
+        proximityService.localStream.getVideoTracks()
       );
       if (videoRef.current) {
         videoRef.current.srcObject = videoStream;

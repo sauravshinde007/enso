@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
+import { PROXIMITY_RADIUS } from '../config/proximity';
 
 export default function Minimap() {
     const [mapDim, setMapDim] = useState({ width: 0, height: 0 });
@@ -77,8 +78,8 @@ export default function Minimap() {
         ctx.fill();
 
         // Proximity (Green Halo)
-        // 150px world radius -> scale -> dpr
-        const rad = 150 * scale * dpr;
+        // proximity world radius -> scale -> dpr
+        const rad = PROXIMITY_RADIUS * scale * dpr;
         ctx.strokeStyle = "rgba(34, 197, 94, 0.4)";
         ctx.setLineDash([4 * dpr, 4 * dpr]); // Dotted
         ctx.beginPath();

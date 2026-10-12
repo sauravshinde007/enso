@@ -1,8 +1,9 @@
 
 import socketService from "../../services/socketService";
-import peerService from "../../services/peerService";
+import proximityService from "../../services/proximityService";
 import Phaser from "phaser";
 import { QuadTree } from "../utils/QuadTree";
+import { PROXIMITY_RADIUS, PROXIMITY_EXIT_RADIUS, PROXIMITY_UPDATE_MS } from "../../config/proximity";
 
 export default class NetworkManager {
     constructor(scene, playerManager, mapManager, voiceManager) {
@@ -15,14 +16,13 @@ export default class NetworkManager {
 
         // State
         this.myRole = 'employee';
-        this.disconnectTimers = new Map();
         this.currentNearbyPlayers = new Set();
 
         this.lastSentState = { x: 0, y: 0, anim: "" };
         this.movementInterval = null;
 
         // Config
-        this.nearbyPlayersUpdateInterval = 1000;
+        this.nearbyPlayersUpdateInterval = PROXIMITY_UPDATE_MS;
         this.lastNearbyPlayersUpdate = 0;
     }
 
@@ -98,10 +98,6 @@ export default class NetworkManager {
             // Also cleanup voice
             this.voiceManager.handleCallEnded(id);
             this.currentNearbyPlayers.delete(id);
-            if (this.disconnectTimers.has(id)) {
-                clearTimeout(this.disconnectTimers.get(id));
-                this.disconnectTimers.delete(id);
-            }
         };
         socketService.onPlayerLeft(this.socketHandlers.onPlayerLeft);
 
@@ -137,11 +133,11 @@ export default class NetworkManager {
         };
         socketService.onPlayerWorking(this.socketHandlers.onPlayerWorking);
 
-        // Proximity Calls
-        this.socketHandlers.onInitiateProximityCalls = (data) => {
-            this.handleProximityCalls(data);
+        // Proximity (LiveKit subscriptions)
+        this.socketHandlers.onProximityPeers = (data) => {
+            this.handleProximityPeers(data);
         };
-        socketService.onInitiateProximityCalls(this.socketHandlers.onInitiateProximityCalls);
+        socketService.onProximityPeers(this.socketHandlers.onProximityPeers);
     }
 
     sendMovementUpdate() {
@@ -164,63 +160,24 @@ export default class NetworkManager {
         }
     }
 
-    handleProximityCalls(data) {
-        if (!this.scene.sys.isActive() || !peerService.peer) return;
-        const newNearbyIds = new Set(data.nearbyPlayers.map((p) => p.id));
-
-        // End calls (Grace period)
-        this.currentNearbyPlayers.forEach((pid) => {
-            if (!newNearbyIds.has(pid)) {
-                if (this.disconnectTimers.has(pid)) return;
-
-                console.log(`⏳ Player ${pid} moved away, scheduling disconnect...`);
-                const timerId = setTimeout(() => {
-                    console.log("👋 Grace period over, ending call:", pid);
-                    peerService.endCall(pid);
-                    this.currentNearbyPlayers.delete(pid);
-                    this.disconnectTimers.delete(pid);
-                }, 1000);
-
-                this.disconnectTimers.set(pid, timerId);
-            }
-        });
-
-        // Start calls
-        data.nearbyPlayers.forEach((p) => {
-            if (this.disconnectTimers.has(p.id)) {
-                console.log(`✨ Player ${p.username} returned within grace period!`);
-                clearTimeout(this.disconnectTimers.get(p.id));
-                this.disconnectTimers.delete(p.id);
-                return;
-            }
-
-            if (!this.currentNearbyPlayers.has(p.id)) {
-                if (peerService.peer) {
-                    // Prevent glare by only letting one side initiate the call
-                    const myId = peerService.peer.id;
-                    const theirId = peerService.getPeerId(p.id);
-                    
-                    if (myId > theirId) {
-                        peerService.callPeer(p.id);
-                    } else {
-                        console.log(`Waiting for ${theirId} to initiate call to us (${myId}) to prevent glare.`);
-                    }
-                    this.currentNearbyPlayers.add(p.id);
-                }
-            }
-        });
+    handleProximityPeers(data) {
+        // No scene-active guard: a dropped update here would leave media connected.
+        // Server sends the symmetric set (A<->B if either side sees the other)
+        const ids = (data?.peers || []).map((p) => p.id);
+        this.currentNearbyPlayers = new Set(ids); // used for hysteresis in getNearbyPlayersToEmit
+        proximityService.setNearby(ids);
     }
 
     update(currTime) {
         // Throttled nearby update
         if (currTime - this.lastNearbyPlayersUpdate >= this.nearbyPlayersUpdateInterval) {
-            const nearby = this.getNearbyPlayersToEmit(150, 200);
+            const nearby = this.getNearbyPlayersToEmit(PROXIMITY_RADIUS, PROXIMITY_EXIT_RADIUS);
             socketService.emitNearbyPlayers({ nearbyPlayers: nearby });
             this.lastNearbyPlayersUpdate = currTime;
         }
     }
 
-    getNearbyPlayersToEmit(innerRadius, outerRadius = 150) {
+    getNearbyPlayersToEmit(innerRadius = PROXIMITY_RADIUS, outerRadius = PROXIMITY_EXIT_RADIUS) {
         // We rely on map manager for raycaster
         // This duplicates World.js logic but uses managers
         const players = this.playerManager.players;
@@ -330,7 +287,7 @@ export default class NetworkManager {
         if (this.socketHandlers.onPlayerJoined) socketService.off("playerJoined", this.socketHandlers.onPlayerJoined);
         if (this.socketHandlers.onPlayerMoved) socketService.off("playerMoved", this.socketHandlers.onPlayerMoved);
         if (this.socketHandlers.onPlayerLeft) socketService.off("playerLeft", this.socketHandlers.onPlayerLeft);
-        if (this.socketHandlers.onInitiateProximityCalls) socketService.off("initiateProximityCalls", this.socketHandlers.onInitiateProximityCalls);
+        if (this.socketHandlers.onProximityPeers) socketService.off("proximityPeers", this.socketHandlers.onProximityPeers);
         if (this.socketHandlers.onPlayerReaction) socketService.off("playerReaction", this.socketHandlers.onPlayerReaction);
         if (this.socketHandlers.onPlayerWorking) socketService.off("playerWorking", this.socketHandlers.onPlayerWorking);
 

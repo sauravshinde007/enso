@@ -1,35 +1,26 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import peerService from '../services/peerService';
-import socketService from '../services/socketService';
+import proximityService from '../services/proximityService';
 import '../styles/videogrid.css';
 
 const MAX_REMOTE_VIDEOS = 4;
 const ANIMATION_DURATION = 300; // ms, matches CSS
 
-function getUsernameFromPeerId(peerId) {
+// Remote streams are keyed by socket id (== LiveKit participant identity)
+function getUsername(id) {
   try {
-    const game = window._phaserGame;
-    if (!game) return peerId.slice(0, 6) + '...';
-
-    const worldScene = game.scene.getScene('WorldScene');
-    if (worldScene && worldScene.playerManager) {
-      // Try fuzzy match using sanitized ID
-      for (const [socketId, name] of worldScene.playerManager.playerUsernames.entries()) {
-        if (peerService.getPeerId(socketId) === peerId) {
-          return name;
-        }
-      }
-    }
+    const worldScene = window._phaserGame?.scene.getScene('WorldScene');
+    const name = worldScene?.playerManager?.playerUsernames.get(id);
+    if (name) return name;
   } catch (e) {
     console.error("Error getting username:", e);
   }
-  return peerId.slice(0, 6) + '...';
+  return id.slice(0, 6) + '...';
 }
 
-const VideoPlayer = ({ stream, peerId, isVideoEnabledBySignaling, isExiting, onVisibilityChange }) => {
+const VideoPlayer = ({ stream, peerId, isExiting, onVisibilityChange }) => {
   const videoRef = useRef(null);
   const [hasVideo, setHasVideo] = useState(false);
-  const username = getUsernameFromPeerId(peerId);
+  const username = getUsername(peerId);
 
   // 1. Monitor stream state (tracks, mute/unmute)
   useEffect(() => {
@@ -39,11 +30,9 @@ const VideoPlayer = ({ stream, peerId, isVideoEnabledBySignaling, isExiting, onV
       const videoTracks = stream.getVideoTracks();
       const videoTrack = videoTracks[0];
 
-      // Robust check: active ONLY if:
-      // 1. Track exists
-      // 2. Track is not muted (WebRTC level)
-      // 3. Signaling says it should be enabled (Server level truth)
-      const isVideoActive = !!(videoTrack && !videoTrack.muted && isVideoEnabledBySignaling);
+      // With the SFU, a camera that is off is unpublished, so the track simply isn't there.
+      // `muted` covers the gap before the first frame arrives.
+      const isVideoActive = !!(videoTrack && videoTrack.readyState === 'live' && !videoTrack.muted);
       
       setHasVideo(prev => {
         if (prev !== isVideoActive) {
@@ -83,7 +72,7 @@ const VideoPlayer = ({ stream, peerId, isVideoEnabledBySignaling, isExiting, onV
         track.removeEventListener('ended', handleTrackChange);
       });
     };
-  }, [stream, isVideoEnabledBySignaling]);
+  }, [stream]);
   useEffect(() => {
     onVisibilityChange(peerId, hasVideo);
   }, [hasVideo, peerId, onVisibilityChange]);
@@ -121,7 +110,6 @@ const VideoPlayer = ({ stream, peerId, isVideoEnabledBySignaling, isExiting, onV
 
 export default function VideoGrid({ isVideoEnabled }) {
   const [displayStreams, setDisplayStreams] = useState([]); // { peerId, stream, isExiting, exitStart }
-  const [videoStatusMap, setVideoStatusMap] = useState({});
   const [localStream, setLocalStream] = useState(null);
   const visiblePeersRef = useRef(new Set());
 
@@ -135,12 +123,9 @@ export default function VideoGrid({ isVideoEnabled }) {
 
   useEffect(() => {
     const updateLocalStream = () => {
-      if (peerService.localStream) {
-        console.log("VideoGrid: Updating local stream tracks:", peerService.localStream.getTracks().map(t => `${t.kind}:${t.readyState}:${t.enabled}`));
-        // Only set non-null if we actually have video tracks (if video is enabled)
-        // Or just pass it and let video element handle blankness?
+      if (proximityService.localStream) {
         // Creating new MediaStream forces React to re-eval the ref.
-        setLocalStream(new MediaStream(peerService.localStream.getTracks()));
+        setLocalStream(new MediaStream(proximityService.localStream.getVideoTracks()));
       } else {
         setLocalStream(null);
       }
@@ -150,7 +135,7 @@ export default function VideoGrid({ isVideoEnabled }) {
     updateLocalStream();
 
     // Subscribe to updates
-    const unsubscribe = peerService.onLocalStreamUpdated(() => {
+    const unsubscribe = proximityService.onLocalStreamUpdated(() => {
       updateLocalStream();
     });
 
@@ -160,60 +145,9 @@ export default function VideoGrid({ isVideoEnabled }) {
   }, [isVideoEnabled]);
 
   useEffect(() => {
-    const handleVideoStatus = ({ id, videoEnabled }) => {
-      const peerId = peerService.getPeerId(id);
-      setVideoStatusMap(prev => ({
-        ...prev,
-        [peerId]: videoEnabled
-      }));
-    };
-
-    const handlePlayers = (players) => {
-      setVideoStatusMap(prev => {
-        const next = { ...prev };
-        for (const [id, player] of Object.entries(players)) {
-          next[peerService.getPeerId(id)] = player.videoEnabled;
-        }
-        return next;
-      });
-    };
-
-    const handlePlayerJoined = (player) => {
-      const peerId = peerService.getPeerId(player.id);
-      setVideoStatusMap(prev => ({
-        ...prev,
-        [peerId]: player.videoEnabled
-      }));
-    };
-
-    // Use direct 'on' and 'off' from socketService
-    socketService.on("playerVideoStatus", handleVideoStatus);
-    socketService.on("players", handlePlayers);
-    socketService.on("playerJoined", handlePlayerJoined);
-
-    // Initial load check if globalPlayers are already available in socketService
-    if (socketService.getGlobalPlayers) {
-        const currentPlayers = socketService.getGlobalPlayers();
-        if (currentPlayers && Object.keys(currentPlayers).length > 0) {
-            handlePlayers(currentPlayers);
-        }
-    }
-
-    return () => {
-      socketService.off("playerVideoStatus", handleVideoStatus);
-      socketService.off("players", handlePlayers);
-      socketService.off("playerJoined", handlePlayerJoined);
-    };
-  }, []);
-
-  useEffect(() => {
-    let lastSize = 0;
     const update = () => {
       // Get current active streams from service
-      const allRemoteStreams = peerService.getRemoteStreams();
-      const currentSize = allRemoteStreams.length;
-      
-      lastSize = currentSize;
+      const allRemoteStreams = proximityService.getRemoteStreams();
 
       const activeData = allRemoteStreams.slice(0, MAX_REMOTE_VIDEOS);
       const activeMap = new Map(activeData); // peerId -> stream
@@ -236,6 +170,10 @@ export default function VideoGrid({ isVideoEnabled }) {
                 isExiting: false,
                 exitStart: null
               });
+              hasChanges = true;
+            } else if (item.stream !== activeMap.get(item.peerId)) {
+              // Track set changed (e.g. camera turned on) -> new MediaStream
+              next.push({ ...item, stream: activeMap.get(item.peerId) });
               hasChanges = true;
             } else {
               // Nothing changed, preserve ref
@@ -271,15 +209,6 @@ export default function VideoGrid({ isVideoEnabled }) {
             hasChanges = true;
           }
         });
-
-        // Debugging info
-        if (activeMap.size > 0) {
-            console.log("VideoGrid Update:", {
-                activeStreamsCount: activeMap.size,
-                displayStreamsCount: next.length,
-                videoStatusMapKeys: Object.keys(videoStatusMap), // THIS IS BUGGY BECAUSE OF CLOSURE!
-            });
-        }
 
         return hasChanges ? next : prev;
       });
@@ -332,7 +261,6 @@ export default function VideoGrid({ isVideoEnabled }) {
           key={peerId}
           peerId={peerId}
           stream={stream}
-          isVideoEnabledBySignaling={!!videoStatusMap[peerId]}
           isExiting={isExiting}
           onVisibilityChange={handleVisibilityChange}
         />
