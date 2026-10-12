@@ -1,12 +1,15 @@
 
 import Phaser from "phaser";
+import proximityService from "../../services/proximityService";
 import peerService from "../../services/peerService";
+import { PROXIMITY_EXIT_RADIUS } from "../../config/proximity";
 
 export default class VoiceManager {
     constructor(scene) {
         this.scene = scene;
-        this.audioElements = {}; // peerId -> HTMLAudioElement
+        this.audioElements = {}; // socketId -> HTMLAudioElement
         this.peerUnsubscribes = [];
+        this.blockedAudio = new Set(); // elements the browser refused to autoplay
 
         this.myVideoElement = null;
         this.isProximityMode = false;
@@ -20,30 +23,35 @@ export default class VoiceManager {
     }
 
     async initialize(socketId) {
+        // Stream handlers (keyed by socket id == LiveKit identity)
+        const unsubStream = proximityService.onStreamReceived((id, stream) => {
+            console.log("🔊 Receiving proximity media from:", id);
+            this.handleRemoteStream(id, stream);
+        });
+        this.peerUnsubscribes.push(unsubStream);
+
+        const unsubCallEnd = proximityService.onCallEnded((id) => {
+            console.log("📴 Proximity media ended with:", id);
+            this.handleCallEnded(id);
+        });
+        this.peerUnsubscribes.push(unsubCallEnd);
+
+        // Listen for UI toggles (Video)
+        this.setupUIListeners();
+
         try {
-            console.log("🎤 Initializing PeerJS with socket ID:", socketId);
-            await peerService.initialize(socketId);
-            console.log("✅ PeerJS connected");
-
-            // Stream handlers
-            const unsubStream = peerService.onStreamReceived((peerId, stream) => {
-                console.log("🔊 Received audio stream from:", peerId);
-                this.handleRemoteStream(peerId, stream);
-            });
-            this.peerUnsubscribes.push(unsubStream);
-
-            const unsubCallEnd = peerService.onCallEnded((peerId) => {
-                console.log("📴 Call ended with:", peerId);
-                this.handleCallEnded(peerId);
-            });
-            this.peerUnsubscribes.push(unsubCallEnd);
-
-            // Listen for UI toggles (Video)
-            this.setupUIListeners();
-
+            console.log("🎤 Connecting to LiveKit proximity room...");
+            await proximityService.connect();
         } catch (error) {
-            console.error("❌ Failed to initialize PeerJS:", error);
+            console.error("❌ Failed to connect to proximity voice/video:", error);
             alert("Could not initialize voice/video service. Please refresh and try again.");
+        }
+
+        // PeerJS is only used for computer screen sharing; failure must not affect proximity.
+        try {
+            await peerService.initialize(socketId);
+        } catch (error) {
+            console.error("❌ Failed to initialize PeerJS (screen sharing):", error);
         }
     }
 
@@ -60,45 +68,61 @@ export default class VoiceManager {
             this.toggleLocalVideo(this.localVideoEnabled);
         };
 
+        // Browsers block audio autoplay until a user gesture; retry on the next one.
+        const onUserGesture = () => {
+            this.blockedAudio.forEach(audio => {
+                audio.play().then(() => this.blockedAudio.delete(audio)).catch(() => {});
+            });
+        };
+
         window.addEventListener('local-video-toggle', onLocalVideoToggle);
         window.addEventListener('proximity-video-active', onProximityActive);
+        window.addEventListener('pointerdown', onUserGesture);
+        window.addEventListener('keydown', onUserGesture);
 
         this.cleanupUI = () => {
             window.removeEventListener('local-video-toggle', onLocalVideoToggle);
             window.removeEventListener('proximity-video-active', onProximityActive);
+            window.removeEventListener('pointerdown', onUserGesture);
+            window.removeEventListener('keydown', onUserGesture);
         }
     }
 
-    handleRemoteStream(peerId, stream) {
-        if (!this.audioElements[peerId]) {
-            const audio = document.createElement("audio");
+    handleRemoteStream(id, stream) {
+        let audio = this.audioElements[id];
+        if (!audio) {
+            audio = document.createElement("audio");
             audio.autoplay = true;
             audio.volume = 1.0;
-            audio.srcObject = stream;
             audio.style.display = "none";
             document.body.appendChild(audio);
-            this.audioElements[peerId] = audio;
+            this.audioElements[id] = audio;
+        }
 
-            audio.onloadedmetadata = () => {
-                audio.play().catch(err => console.error("Audio play failed", err));
-            };
-
-            // We will update volume in update loop or when requested
+        // The service hands us a new MediaStream whenever the track set changes
+        if (audio.srcObject !== stream) {
+            audio.srcObject = stream;
+            audio.play().catch(err => {
+                console.warn("Audio autoplay blocked, will retry on next interaction", err);
+                this.blockedAudio.add(audio);
+            });
         }
     }
 
-    handleCallEnded(peerId) {
-        if (this.audioElements[peerId]) {
-            const audio = this.audioElements[peerId];
+    handleCallEnded(id) {
+        const audio = this.audioElements[id];
+        if (audio) {
             audio.pause();
             audio.srcObject = null;
             if (audio.parentNode) audio.parentNode.removeChild(audio);
-            delete this.audioElements[peerId];
+            this.blockedAudio.delete(audio);
+            delete this.audioElements[id];
         }
     }
 
-    updateAudioVolume(myPlayer, otherPlayer, peerId, maxDist = 150) {
-        const audioElement = this.audioElements[peerId];
+    // Fades out to 0 exactly where the connection drops, so you never see someone you can't hear
+    updateAudioVolume(myPlayer, otherPlayer, id, maxDist = PROXIMITY_EXIT_RADIUS) {
+        const audioElement = this.audioElements[id];
         if (!audioElement || !myPlayer || !otherPlayer) return;
 
         const distance = Phaser.Math.Distance.Between(
@@ -177,8 +201,8 @@ export default class VoiceManager {
         document.body.appendChild(vid);
         this.myVideoElement = vid;
 
-        if (peerService.localStream) {
-            vid.srcObject = peerService.localStream;
+        if (proximityService.localStream) {
+            vid.srcObject = proximityService.localStream;
         }
     }
 
@@ -250,8 +274,12 @@ export default class VoiceManager {
             if (audio.parentNode) audio.parentNode.removeChild(audio);
         });
         this.audioElements = {};
+        this.blockedAudio.clear();
 
         this.removeVideoBubble();
         if (this.cleanupUI) this.cleanupUI();
+
+        proximityService.disconnect();
+        peerService.destroy();
     }
 }

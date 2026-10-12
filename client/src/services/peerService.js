@@ -1,23 +1,17 @@
 // client/src/services/peerService.js
+// PeerJS is now only used for 1:N computer screen sharing (ComputerModal).
+// Proximity audio/video lives in proximityService.js (LiveKit SFU).
 import Peer from 'peerjs';
 
 class PeerService {
   constructor() {
     this.peer = null;
-    this.localStream = null;
-    this.activeCalls = new Map(); // Map of peerId -> call object
-    this.remoteStreams = new Map(); // Map of peerId -> remote stream
-    
+
     // Screen sharing
     this.screenStream = null;
     this.activeScreenCalls = new Map(); // incoming view requests from others
     this.viewingScreenCall = null; // when we view someone else's screen
     this.viewingScreenStream = null; // someone else's screen stream
-
-    this.streamReceivedListeners = new Set();
-    this.callEndedListeners = new Set();
-    this.localStreamListeners = new Set();
-    this.screenViewStreamListeners = new Set(); // to notify UI of incoming screen stream
   }
 
 
@@ -94,7 +88,6 @@ class PeerService {
         });
 
         this.peer.on('call', (call) => {
-          console.log('📞 Incoming call from:', call.peer);
           this.handleIncomingCall(call);
         });
 
@@ -114,199 +107,31 @@ class PeerService {
     });
   }
 
-  notifyLocalStreamListeners() {
-    if (this.localStreamListeners.size > 0) {
-      const stream = this.localStream; // Pass the reference
-      this.localStreamListeners.forEach(cb => cb(stream));
-    }
-  }
-
-  onLocalStreamUpdated(callback) {
-    this.localStreamListeners.add(callback);
-    return () => this.localStreamListeners.delete(callback);
-  }
-
   /**
-   * Get user's media stream (audio/video)
-   * @param {Object} constraints - MediaStream constraints object (e.g., { audio: true, video: { ... } })
-   */
-  _createDummyVideoTrack() {
-    const canvas = document.createElement('canvas');
-    canvas.width = 1;
-    canvas.height = 1;
-    const ctx = canvas.getContext('2d');
-    ctx.fillRect(0, 0, 1, 1);
-    const stream = canvas.captureStream(1);
-    const track = stream.getVideoTracks()[0];
-    // Tag the placeholder track so we don't mistake it for a real camera track
-    track._isPlaceholder = true;
-    return track;
-  }
-
-  async getUserMedia(constraints) {
-    try {
-      console.log('Requesting media with constraints:', constraints);
-
-      // Check if mediaDevices is supported
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        throw new Error('getUserMedia is not supported in this browser');
-      }
-
-      this.localStream = await navigator.mediaDevices.getUserMedia(constraints);
-      
-      // Always ensure we have a video track for WebRTC renegotiation avoidance
-      if (this.localStream.getVideoTracks().length === 0) {
-        console.log('Adding dummy video track to allow mid-call toggling');
-        const dummyTrack = this._createDummyVideoTrack();
-        this.localStream.addTrack(dummyTrack);
-      }
-
-      console.log('✅ Local media stream obtained');
-      console.log('Audio tracks:', this.localStream.getAudioTracks().length);
-      console.log('Video tracks:', this.localStream.getVideoTracks().length);
-
-      // Verify audio track is enabled
-      const audioTracks = this.localStream.getAudioTracks();
-      if (audioTracks.length > 0) {
-        console.log('Audio track label:', audioTracks[0].label);
-        console.log('Audio track enabled:', audioTracks[0].enabled);
-        console.log('Audio track ready state:', audioTracks[0].readyState);
-      }
-
-      this.notifyLocalStreamListeners();
-
-      // We do NOT disable video by default here. 
-      // If the caller requested video, they likely want it on.
-      // this.setVideoEnabled(false);
-
-      return this.localStream;
-    } catch (error) {
-      console.error('❌ Failed to get user media:', error);
-      console.error('Error name:', error.name);
-      console.error('Error message:', error.message);
-      
-      if (error.name === 'NotReadableError' || error.name === 'TrackStartError') {
-        throw new Error('CAMERA_IN_USE: Your camera appears to be in use by another application or browser tab.');
-      }
-      
-      throw error;
-    }
-  }
-
-  /**
-   * Call another peer
-   * @param {string} remoteUserId - The socket ID of the user to call
-   */
-  callPeer(remoteUserId) {
-    if (!this.peer || this.peer.disconnected) {
-      console.log('PeerJS server not connected, cannot call.');
-      return;
-    }
-
-    // In Metaverse games, we might want to initiate connections even if *we* don't have mic/video, 
-    // so we can still RECEIVE audio from other people (listen-only mode). 
-    // Usually Peer.js allows `.call(id, stream)` with a blank stream or no stream but it behaves weirdly.
-    // If we have no localStream, we will not call. 
-    if (!this.localStream) {
-      console.warn('Local stream not initialized. Cannot send audio/video to peer.');
-      return;
-    }
-
-    const remotePeerId = this.getPeerId(remoteUserId);
-
-    // Don't call if already in a call with this peer
-    if (this.activeCalls.has(remotePeerId)) {
-      console.log('Already in call with', remotePeerId);
-      return;
-    }
-
-    console.log('📞 Calling peer:', remotePeerId, '(User:', remoteUserId, ')');
-    const call = this.peer.call(remotePeerId, this.localStream);
-
-    call.on('stream', (remoteStream) => {
-      console.log('✅ Received stream from:', remotePeerId);
-      this.activeCalls.set(remotePeerId, call);
-      this.remoteStreams.set(remotePeerId, remoteStream);
-
-      this.streamReceivedListeners.forEach(cb => cb(remotePeerId, remoteStream));
-    });
-
-    call.on('close', () => {
-      console.log('📴 Call closed with:', remotePeerId);
-      this.activeCalls.delete(remotePeerId);
-      this.remoteStreams.delete(remotePeerId);
-      this.callEndedListeners.forEach(cb => cb(remotePeerId));
-    });
-
-    call.on('error', (error) => {
-      console.error('Call error with', remotePeerId, ':', error);
-      this.activeCalls.delete(remotePeerId);
-      this.remoteStreams.delete(remotePeerId);
-    });
-  }
-
-  /**
-   * Handle incoming call
+   * Handle incoming call (only screen-view requests are expected)
    * @param {Object} call - PeerJS call object
    */
   handleIncomingCall(call) {
-    // If it's a screen viewing request
-    if (call.metadata && call.metadata.type === 'screen-view') {
-      console.log('👀 Incoming screen view request from:', call.peer);
-      if (this.screenStream) {
-        // We are currently sharing out screen, answer with it
-        call.answer(this.screenStream);
-        this.activeScreenCalls.set(call.peer, call);
-        call.on('close', () => {
-          this.activeScreenCalls.delete(call.peer);
-        });
-        call.on('error', () => {
-          this.activeScreenCalls.delete(call.peer);
-        });
-      } else {
-        // Reject it
-        console.warn("Screen view request received but we are not sharing a screen");
-        call.close();
-      }
+    if (call.metadata?.type !== 'screen-view') {
+      call.close();
       return;
     }
 
-    if (!this.localStream) {
-      console.error('No local stream available to answer call');
-      return;
+    console.log('👀 Incoming screen view request from:', call.peer);
+    if (this.screenStream) {
+      // We are currently sharing our screen, answer with it
+      call.answer(this.screenStream);
+      this.activeScreenCalls.set(call.peer, call);
+      call.on('close', () => {
+        this.activeScreenCalls.delete(call.peer);
+      });
+      call.on('error', () => {
+        this.activeScreenCalls.delete(call.peer);
+      });
+    } else {
+      console.warn("Screen view request received but we are not sharing a screen");
+      call.close();
     }
-
-    const callerPeerId = call.peer;
-
-    // Don't answer if already in a call with this peer
-    if (this.activeCalls.has(callerPeerId)) {
-      console.log('Already in call with', callerPeerId);
-      return;
-    }
-
-    console.log('✅ Answering call from:', callerPeerId);
-    call.answer(this.localStream);
-
-    call.on('stream', (remoteStream) => {
-      console.log('✅ Received stream from:', callerPeerId);
-      this.activeCalls.set(callerPeerId, call);
-      this.remoteStreams.set(callerPeerId, remoteStream);
-
-      this.streamReceivedListeners.forEach(cb => cb(callerPeerId, remoteStream));
-    });
-
-    call.on('close', () => {
-      console.log('📴 Call closed with:', callerPeerId);
-      this.activeCalls.delete(callerPeerId);
-      this.remoteStreams.delete(callerPeerId);
-      this.callEndedListeners.forEach(cb => cb(callerPeerId));
-    });
-
-    call.on('error', (error) => {
-      console.error('Call error with', callerPeerId, ':', error);
-      this.activeCalls.delete(callerPeerId);
-      this.remoteStreams.delete(callerPeerId);
-    });
   }
 
   // ============== SCREEN SHARING =================
@@ -344,13 +169,10 @@ class PeerService {
        return null;
     }
 
-    // Generate a dummy canvas stream if we don't have local stream to send
-    let sendStream = this.localStream;
-    if (!sendStream) {
-       const canvas = document.createElement("canvas");
-       canvas.width = 1; canvas.height = 1;
-       sendStream = canvas.captureStream(1);
-    }
+    // PeerJS needs a stream to place a call; send a 1x1 canvas placeholder
+    const canvas = document.createElement("canvas");
+    canvas.width = 1; canvas.height = 1;
+    const sendStream = canvas.captureStream(1);
 
     const call = this.peer.call(hostPeerId, sendStream, { metadata: { type: 'screen-view' } });
     this.viewingScreenCall = call;
@@ -389,286 +211,16 @@ class PeerService {
   // ===============================================
 
   /**
-   * End call with a specific peer
-   * @param {string} userId - Socket ID
-   */
-  endCall(userId) {
-    const peerId = this.getPeerId(userId);
-    const call = this.activeCalls.get(peerId);
-    if (call) {
-      call.close();
-      this.activeCalls.delete(peerId);
-      this.remoteStreams.delete(peerId);
-      console.log('Ended call with:', peerId);
-    }
-  }
-
-  /**
-   * End all active calls
-   */
-  endAllCalls() {
-    this.activeCalls.forEach((call, peerId) => {
-      call.close();
-      console.log('Ended call with:', peerId);
-    });
-    this.activeCalls.clear();
-    this.remoteStreams.clear();
-  }
-
-  async setAudioEnabled(enabled) {
-    if (!this.localStream) return;
-
-    if (enabled) {
-      const existingTrack = this.localStream.getAudioTracks()[0];
-      if (existingTrack && existingTrack.readyState === 'live') {
-        existingTrack.enabled = true;
-        this.notifyLocalStreamListeners();
-        return;
-      }
-
-      try {
-        const tempStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        const newAudioTrack = tempStream.getAudioTracks()[0];
-        this.localStream.addTrack(newAudioTrack);
-
-        // Update peer connections
-        this.updateSenders('audio', newAudioTrack);
-
-        this.notifyLocalStreamListeners();
-      } catch (err) {
-        console.error("Failed to enable audio:", err);
-      }
-    } else {
-      this.localStream.getAudioTracks().forEach(track => {
-        track.enabled = false;
-        track.stop();
-        this.localStream.removeTrack(track);
-      });
-      this.notifyLocalStreamListeners();
-    }
-  }
-
-  async setVideoEnabled(enabled) {
-    if (!this.localStream) return;
-
-    if (enabled) {
-      const existingTrack = this.localStream.getVideoTracks()[0];
-      // Only short-circuit if the existing track is live AND it's a real camera track.
-      // If it's a placeholder, we must fetch the real camera track and replace it.
-      if (existingTrack && existingTrack.readyState === 'live' && !existingTrack._isPlaceholder) {
-        existingTrack.enabled = true;
-        this.notifyLocalStreamListeners();
-        return;
-      }
-
-      try {
-        const tempStream = await navigator.mediaDevices.getUserMedia({ video: true });
-        const newVideoTrack = tempStream.getVideoTracks()[0];
-        
-        // Remove the old placeholder or stopped tracks
-        const oldTracks = this.localStream.getVideoTracks();
-        oldTracks.forEach(t => {
-          t.stop();
-          this.localStream.removeTrack(t);
-        });
-
-        this.localStream.addTrack(newVideoTrack);
-
-        // Update peer connections
-        this.updateSenders('video', newVideoTrack);
-
-        this.notifyLocalStreamListeners();
-      } catch (err) {
-        console.error("Failed to enable video:", err);
-      }
-    } else {
-      this.localStream.getVideoTracks().forEach(track => {
-        track.enabled = false;
-        track.stop();
-        this.localStream.removeTrack(track);
-      });
-      
-      const dummyTrack = this._createDummyVideoTrack();
-      this.localStream.addTrack(dummyTrack);
-      this.updateSenders('video', dummyTrack);
-      
-      this.notifyLocalStreamListeners();
-    }
-  }
-
-  /**
-   * Get available audio input devices (microphones)
-   */
-  async getAudioInputDevices() {
-    try {
-      // Ensure we have permission first, or enumerateDevices might return empty labels
-      // check if we already have a stream, otherwise we might need to ask quickly?
-      // actually enumerateDevices works better if permission is granted.
-      const devices = await navigator.mediaDevices.enumerateDevices();
-      return devices.filter(d => d.kind === 'audioinput');
-    } catch (e) {
-      console.error("Failed to list devices", e);
-      return [];
-    }
-  }
-
-  /**
-   * Switch the audio input device
-   * @param {string} deviceId 
-   */
-  async setAudioInputDevice(deviceId) {
-    if (!deviceId) return;
-
-    try {
-      console.log(`Switching audio input to ${deviceId}`);
-      const newStream = await navigator.mediaDevices.getUserMedia({
-        audio: { deviceId: { exact: deviceId } }
-      });
-      const newAudioTrack = newStream.getAudioTracks()[0];
-
-      if (!this.localStream) {
-        this.localStream = newStream;
-      } else {
-        // Replace track in local stream
-        const oldTracks = this.localStream.getAudioTracks();
-        oldTracks.forEach(t => {
-          t.stop();
-          this.localStream.removeTrack(t);
-        });
-        this.localStream.addTrack(newAudioTrack);
-      }
-
-      // Update peer connections
-      this.updateSenders('audio', newAudioTrack);
-
-      this.notifyLocalStreamListeners();
-      return newAudioTrack;
-
-    } catch (err) {
-      console.error("Failed to switch audio device:", err);
-    }
-  }
-
-  /**
-   * Get available video input devices (cameras)
-   */
-  async getVideoInputDevices() {
-    try {
-      const devices = await navigator.mediaDevices.enumerateDevices();
-      return devices.filter(d => d.kind === 'videoinput');
-    } catch (e) {
-      console.error("Failed to list video devices", e);
-      return [];
-    }
-  }
-
-  /**
-   * Switch the video input device
-   * @param {string} deviceId 
-   */
-  async setVideoInputDevice(deviceId) {
-    if (!deviceId) return;
-
-    try {
-      console.log(`Switching video input to ${deviceId}`);
-      const newStream = await navigator.mediaDevices.getUserMedia({
-        video: { deviceId: { exact: deviceId } }
-      });
-      const newVideoTrack = newStream.getVideoTracks()[0];
-
-      if (!this.localStream) {
-        this.localStream = newStream;
-      } else {
-        // Replace track in local stream
-        const oldTracks = this.localStream.getVideoTracks();
-        oldTracks.forEach(t => {
-          t.stop();
-          this.localStream.removeTrack(t);
-        });
-        this.localStream.addTrack(newVideoTrack);
-      }
-
-      // Update peer connections
-      this.updateSenders('video', newVideoTrack);
-
-      this.notifyLocalStreamListeners();
-      return newVideoTrack;
-
-    } catch (err) {
-      console.error("Failed to switch video device:", err);
-    }
-  }
-
-  updateSenders(kind, newTrack) {
-    this.activeCalls.forEach(call => {
-      if (call.peerConnection) {
-        const senders = call.peerConnection.getSenders();
-        const sender = senders.find(s => s.track && s.track.kind === kind) ||
-          senders.find(s => !s.track && s.track === null);
-
-        if (sender) {
-          sender.replaceTrack(newTrack).catch(e => console.error(`Replace ${kind} track failed`, e));
-        } else {
-          console.warn(`No sender found for ${kind} track, adding new track to peer connection.`);
-          call.peerConnection.addTrack(newTrack, this.localStream);
-        }
-      }
-    });
-  }
-
-  /**
-   * Set callback for when stream is received
-   * @param {Function} callback 
-   * @returns {Function} unsubscribe
-   */
-  onStreamReceived(callback) {
-    this.streamReceivedListeners.add(callback);
-    return () => this.streamReceivedListeners.delete(callback);
-  }
-
-  /**
-   * Set callback for when call ends
-   * @param {Function} callback 
-   * @returns {Function} unsubscribe
-   */
-  onCallEnded(callback) {
-    this.callEndedListeners.add(callback);
-    return () => this.callEndedListeners.delete(callback);
-  }
-
-  /**
-   * Get list of active call peer IDs
-   */
-  getActiveCalls() {
-    return Array.from(this.activeCalls.keys());
-  }
-
-  /**
-   * Get list of [peerId, remoteStream] pairs
-   */
-  getRemoteStreams() {
-    return Array.from(this.remoteStreams.entries());
-  }
-
-  /**
    * Cleanup and destroy peer connection
    */
   destroy() {
-    this.endAllCalls();
-
-    if (this.localStream) {
-      this.localStream.getTracks().forEach(track => track.stop());
-      this.localStream = null;
-    }
+    this.stopScreenShare();
+    this.stopViewingScreen();
 
     if (this.peer) {
       this.peer.destroy();
       this.peer = null;
     }
-
-    this.streamReceivedListeners.clear();
-    this.callEndedListeners.clear();
-    this.localStreamListeners.clear();
   }
 }
 

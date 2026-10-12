@@ -3,6 +3,7 @@ import User from "../models/User.js";
 import ScheduledMeeting from "../models/ScheduledMeeting.js";
 import MeetingRecord from "../models/MeetingRecord.js";
 import { ROOM_ACCESS_LEVELS } from "../config/roles.js";
+import { createProximityToken, getLivekitUrl, PROXIMITY_ROOM } from "../services/livekitService.js";
 
 export default (io) => {
   // id -> player state
@@ -10,6 +11,31 @@ export default (io) => {
 
   // computerId -> { socketId, peerId, username }
   const computerScreens = Object.create(null);
+
+  // socketId -> Set of socketIds that client reported as nearby
+  const reportedNearby = Object.create(null);
+  // socketId -> last proximity list sent (to only emit on change)
+  const lastProximityKey = Object.create(null);
+
+  // Proximity is symmetric: A and B are connected if EITHER side reports the other.
+  // This avoids one-sided media when the two clients' range/LOS checks disagree.
+  const emitProximity = (id, force = false) => {
+    if (!players[id]) return;
+
+    const peers = new Set(reportedNearby[id] || []);
+    for (const otherId in reportedNearby) {
+      if (otherId !== id && reportedNearby[otherId].has(id)) peers.add(otherId);
+    }
+
+    const list = [...peers].filter((pid) => players[pid]).sort();
+    const key = list.join(",");
+    if (!force && lastProximityKey[id] === key) return;
+    lastProximityKey[id] = key;
+
+    io.to(id).emit("proximityPeers", {
+      peers: list.map((pid) => ({ id: pid, username: players[pid].username })),
+    });
+  };
 
   io.on("connection", (socket) => {
     console.log("New connection:", socket.id);
@@ -123,7 +149,8 @@ export default (io) => {
       });
     });
 
-    // Proximity: client reports nearby players (for PeerJS calls)
+    // Proximity: client reports nearby players; server sends back the symmetric set
+    // of peers whose LiveKit tracks the client should subscribe to.
     socket.on("nearbyPlayers", (data) => {
       const me = players[socket.id];
       if (!me) return;
@@ -135,25 +162,33 @@ export default (io) => {
       // Store on server (optional, useful for debugging/analytics)
       me.nearbyPlayers = nearby;
 
-      // Ask client to initiate PeerJS calls to these peers
-      socket.emit("initiateProximityCalls", {
-        nearbyPlayers: nearby.map((p) => ({
-          id: p.id,
-          username: p.username,
-          distance: p.distance,
-        })),
-      });
+      const prev = reportedNearby[socket.id] || new Set();
+      const next = new Set(
+        nearby
+          .map((p) => p?.id)
+          .filter((id) => typeof id === "string" && id !== socket.id && players[id])
+      );
+      reportedNearby[socket.id] = next;
 
-      // Notify each nearby player that "me" is in proximity too
-      for (const np of nearby) {
-        const targetId = np.id;
-        if (players[targetId]) {
-          io.to(targetId).emit("playerInProximity", {
-            id: socket.id,
-            username: me.username,
-            distance: np.distance,
-          });
-        }
+      // Always answer the reporter (self-heals any missed update),
+      // and notify anyone else whose symmetric set may have changed.
+      emitProximity(socket.id, true);
+      new Set([...prev, ...next]).forEach((id) => emitProximity(id));
+    });
+
+    // LiveKit (SFU) token for proximity audio/video. Identity = socket.id.
+    socket.on("getProximityToken", async (ack) => {
+      if (typeof ack !== "function") return;
+      const p = players[socket.id];
+      if (!p) return ack({ error: "NOT_JOINED" });
+
+      try {
+        const token = await createProximityToken(socket.id, p.username);
+        console.log(`🎧 LiveKit SFU token issued: ${p.username} (${socket.id}) -> room "${PROXIMITY_ROOM}"`);
+        ack({ token, url: getLivekitUrl(), roomName: PROXIMITY_ROOM });
+      } catch (error) {
+        console.error("Failed to create proximity token:", error);
+        ack({ error: "TOKEN_FAILED" });
       }
     });
 
@@ -216,9 +251,19 @@ export default (io) => {
     });
 
     socket.on("disconnect", async () => {
+      // Proximity cleanup (also needed when the player entry was already removed by a forced logout)
+      const prevNearby = reportedNearby[socket.id] || new Set();
+      delete reportedNearby[socket.id];
+      delete lastProximityKey[socket.id];
+      const affected = new Set(prevNearby);
+      for (const otherId in reportedNearby) {
+        if (reportedNearby[otherId].delete(socket.id)) affected.add(otherId);
+      }
+
       const p = players[socket.id];
       if (!p) {
         console.log("Disconnected before joining:", socket.id);
+        affected.forEach((id) => emitProximity(id));
         return;
       }
 
@@ -288,6 +333,7 @@ export default (io) => {
 
       delete players[socket.id];
       io.emit("playerLeft", socket.id);
+      affected.forEach((id) => emitProximity(id));
     });
   });
 };

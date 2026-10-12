@@ -1,6 +1,6 @@
 // client/src/components/VoiceChat.jsx
 import React, { useState, useEffect, useRef } from 'react';
-import peerService from '../services/peerService';
+import proximityService from '../services/proximityService';
 import socketService from '../services/socketService';
 import '../styles/voicechat.css';
 import { useAuth } from '../context/AuthContext';
@@ -38,10 +38,10 @@ export default function VoiceChat({ isVideoEnabled, setIsVideoEnabled }) {
     checkPermission();
 
     // Check if media is already enabled
-    if (peerService.localStream) {
+    if (proximityService.localStream) {
       setIsConnected(true);
       // Sync prop state with stream state on initial load
-      const videoTrack = peerService.localStream.getVideoTracks()[0];
+      const videoTrack = proximityService.localStream.getVideoTracks()[0];
       if (videoTrack) {
         setIsVideoEnabled(videoTrack.enabled);
       }
@@ -49,14 +49,14 @@ export default function VoiceChat({ isVideoEnabled, setIsVideoEnabled }) {
 
     // Update active calls and transmission status periodically
     const interval = setInterval(() => {
-      const calls = peerService.getActiveCalls();
+      const calls = proximityService.getActiveCalls();
       setActiveCalls(calls);
 
       // Check if we're transmitting (have active calls and mic is enabled and not muted)
-      setIsTransmitting(calls.length > 0 && peerService.localStream && !isMuted);
+      setIsTransmitting(calls.length > 0 && proximityService.localStream && !isMuted);
 
       // Check if stream exists
-      if (peerService.localStream && !isConnected) {
+      if (proximityService.localStream && !isConnected) {
         setIsConnected(true);
       }
 
@@ -74,7 +74,7 @@ export default function VoiceChat({ isVideoEnabled, setIsVideoEnabled }) {
     // Logic: If currently muted (Audio OFF), we want to ENABLE.
     const enable = isMuted;
 
-    await peerService.setAudioEnabled(enable);
+    await proximityService.setAudioEnabled(enable);
     setIsMuted(!enable);
   };
 
@@ -82,8 +82,8 @@ export default function VoiceChat({ isVideoEnabled, setIsVideoEnabled }) {
     const newVideoState = !isVideoEnabled;
     // Set local state
     setIsVideoEnabled(newVideoState);
-    // Tell peer service to enable/disable tracks
-    await peerService.setVideoEnabled(newVideoState);
+    // Tell proximity service to enable/disable tracks
+    await proximityService.setVideoEnabled(newVideoState);
 
     // Explicitly log the change for debugging
     console.log(`🎥 Toggled Video: ${newVideoState ? 'ON' : 'OFF'}`);
@@ -96,14 +96,14 @@ export default function VoiceChat({ isVideoEnabled, setIsVideoEnabled }) {
       console.log('🎤 Initializing media...', constraints);
 
       // Request media
-      await peerService.getUserMedia(constraints);
+      await proximityService.getUserMedia(constraints);
 
       setIsConnected(true);
 
       // Set initial states based on what we requested
       if (constraints.audio) {
         setIsMuted(false);
-        // peerService.setAudioEnabled(true); // Already active from getUserMedia
+        // proximityService.setAudioEnabled(true); // Already active from getUserMedia
       } else {
         setIsMuted(true);
       }
@@ -163,22 +163,22 @@ export default function VoiceChat({ isVideoEnabled, setIsVideoEnabled }) {
   useEffect(() => {
     const loadDevices = async () => {
       // Only load if we have permission/connection to ensure labels are visible
-      const aDevices = await peerService.getAudioInputDevices();
+      const aDevices = await proximityService.getAudioInputDevices();
       setAudioDevices(aDevices);
 
-      const vDevices = await peerService.getVideoInputDevices();
+      const vDevices = await proximityService.getVideoInputDevices();
       setVideoDevices(vDevices);
 
       // Try to identify current devices
-      if (peerService.localStream) {
-        const audioTrack = peerService.localStream.getAudioTracks()[0];
+      if (proximityService.localStream) {
+        const audioTrack = proximityService.localStream.getAudioTracks()[0];
         if (audioTrack) {
           const match = aDevices.find(d => d.label === audioTrack.label);
           if (match) setSelectedAudioDeviceId(match.deviceId);
           else if (aDevices.length > 0) setSelectedAudioDeviceId(aDevices[0].deviceId);
         }
 
-        const videoTrack = peerService.localStream.getVideoTracks()[0];
+        const videoTrack = proximityService.localStream.getVideoTracks()[0];
         if (videoTrack) {
           const match = vDevices.find(d => d.label === videoTrack.label);
           if (match) setSelectedVideoDeviceId(match.deviceId);
@@ -211,13 +211,13 @@ export default function VoiceChat({ isVideoEnabled, setIsVideoEnabled }) {
   }, [showAudioMenu, showVideoMenu]);
 
   const handleAudioDeviceSelect = async (deviceId) => {
-    await peerService.setAudioInputDevice(deviceId);
+    await proximityService.setAudioInputDevice(deviceId);
     setSelectedAudioDeviceId(deviceId);
     setShowAudioMenu(false);
   };
 
   const handleVideoDeviceSelect = async (deviceId) => {
-    await peerService.setVideoInputDevice(deviceId);
+    await proximityService.setVideoInputDevice(deviceId);
     setSelectedVideoDeviceId(deviceId);
     setShowVideoMenu(false);
   };

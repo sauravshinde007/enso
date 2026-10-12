@@ -131,4 +131,15 @@ export default defineAgent({
 // 3. Start the worker wrapper when executing this file directly
 cli.runApp(new WorkerOptions({
   agent: fileURLToPath(import.meta.url),
+  // Without an agentName LiveKit dispatches this worker to EVERY room in the project.
+  // Only transcribe meeting rooms (`meta-<roomId>`), never the proximity room.
+  requestFunc: async (req) => {
+    const roomName = req.room?.name || '';
+    if (roomName.startsWith('meta-')) {
+      await req.accept();
+    } else {
+      console.log(`⏭️ Skipping non-meeting room: ${roomName}`);
+      await req.reject();
+    }
+  },
 }));

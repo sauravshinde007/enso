@@ -19,7 +19,8 @@ The project is built on a Client-Server model, divided into three primary layers
 3. **Backend (Node.js + Express + Socket.io)**
    - **Express Server:** Handles REST API routes for authentication and meeting management.
    - **Socket.io Server:** Manages real-time, low-latency multiplayer synchronization (player positions, state changes).
-   - **PeerJS Server:** Facilitates WebRTC signaling for peer-to-peer proximity audio and video connections.
+   - **LiveKit (SFU):** Proximity audio/video. Every player joins one LiveKit room (`metaverse-proximity`) and publishes once; clients subscribe only to players in proximity.
+   - **PeerJS Server:** WebRTC signaling for computer screen sharing only.
    - **MongoDB:** Serves as the persistent database for users, roles, and meeting records.
    - **BullMQ + Redis:** Manages background job queues (e.g., asynchronous AI processing for meeting summaries).
 
@@ -54,6 +55,7 @@ The project is built on a Client-Server model, divided into three primary layers
 ### 2. Proximity-Based Audio & Line-of-Sight
 - **Client Engine:** Phaser periodically calculates the distance between the local player and other players.
 - **Raycasting:** It checks if any map walls block the line of sight between two players.
-- **Signaling:** If players are near and visible, `peerService` initiates WebRTC connections.
+- **Proximity set:** Clients report nearby players every second (`nearbyPlayers`). The server makes it symmetric (A and B are connected if either reports the other) and sends each client its set via `proximityPeers` only when it changes.
+- **SFU media:** `proximityService` joins the LiveKit room (token via the `getProximityToken` socket ack, identity = socket id) with `autoSubscribe: false`, publishes mic/camera, and subscribes/unsubscribes to remote tracks as the proximity set changes (with a 1s leave grace period).
 - **Dynamic Volume:** As players move closer or further apart, `VoiceManager` dynamically adjusts the volume of the respective HTML Audio elements.
 
