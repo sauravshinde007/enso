@@ -6,6 +6,7 @@ import CameraManager from "../managers/CameraManager";
 import PlayerManager from "../managers/PlayerManager";
 import VoiceManager from "../managers/VoiceManager";
 import NetworkManager from "../managers/NetworkManager";
+import StageManager from "../managers/StageManager";
 import socketService from "../../services/socketService";
 
 export default class WorldScene extends Phaser.Scene {
@@ -54,12 +55,14 @@ export default class WorldScene extends Phaser.Scene {
     this.playerManager = new PlayerManager(this, this.inputManager, this.mapManager);
     this.voiceManager = new VoiceManager(this);
     this.networkManager = new NetworkManager(this, this.playerManager, this.mapManager, this.voiceManager);
+    this.stageManager = new StageManager(this);
 
     // 2. Initialize Logic
 
     // Map
     this.mapManager.create();
     this.mapManager.registerRaycaster(this.raycasterPlugin);
+    this.stageManager.create(); // Announcement Hall stage
 
     // Player
     this.playerManager.createAnimations();
@@ -121,6 +124,9 @@ export default class WorldScene extends Phaser.Scene {
         });
         this.lastAudioUpdate = now;
       }
+
+      // Announcement Hall presence
+      if (this.stageManager) this.stageManager.update(this.playerManager.player);
 
       // Update local video bubble pos
       this.voiceManager.updateLocalVideoPosition(this.playerManager.player, this.cameras.main);

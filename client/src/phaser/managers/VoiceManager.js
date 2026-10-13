@@ -125,6 +125,12 @@ export default class VoiceManager {
         const audioElement = this.audioElements[id];
         if (!audioElement || !myPlayer || !otherPlayer) return;
 
+        // Live announcement: the speaker is heard at full volume anywhere in the hall
+        if (this.scene.stageManager?.isBroadcastFrom(id)) {
+            audioElement.volume = 1;
+            return;
+        }
+
         const distance = Phaser.Math.Distance.Between(
             myPlayer.x, myPlayer.y,
             otherPlayer.x, otherPlayer.y

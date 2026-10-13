@@ -3,7 +3,9 @@ import User from "../models/User.js";
 import ScheduledMeeting from "../models/ScheduledMeeting.js";
 import MeetingRecord from "../models/MeetingRecord.js";
 import { ROOM_ACCESS_LEVELS } from "../config/roles.js";
-import { createProximityToken, getLivekitUrl, PROXIMITY_ROOM } from "../services/livekitService.js";
+import { createProximityToken, getLivekitUrl, PROXIMITY_ROOM, setProximityCanPublish } from "../services/livekitService.js";
+import { isInHall } from "../config/announcementHall.js";
+import { getAnnouncementState, onLiveAnnouncementChange } from "../services/announcementService.js";
 
 export default (io) => {
   // id -> player state
@@ -19,14 +21,77 @@ export default (io) => {
 
   // Proximity is symmetric: A and B are connected if EITHER side reports the other.
   // This avoids one-sided media when the two clients' range/LOS checks disagree.
-  const emitProximity = (id, force = false) => {
-    if (!players[id]) return;
-
+  const symmetricPeers = (id) => {
     const peers = new Set(reportedNearby[id] || []);
     for (const otherId in reportedNearby) {
       if (otherId !== id && reportedNearby[otherId].has(id)) peers.add(otherId);
     }
+    return peers;
+  };
 
+  // --- Announcement Hall ---
+  const liveSpeakerSocket = () => {
+    const live = getAnnouncementState().live;
+    if (!live) return null;
+    return Object.keys(players).find((id) => players[id].username === live.speakerName) || null;
+  };
+
+  /**
+   * While an announcement is live:
+   *  - everyone in the hall hears ONLY the speaker (if the speaker is in the hall)
+   *  - the speaker hears nobody
+   *  - people outside the hall keep normal proximity, but never with people inside it
+   */
+  const peersFor = (id) => {
+    if (!getAnnouncementState().live) return symmetricPeers(id);
+
+    const speaker = liveSpeakerSocket();
+    if (isInHall(players[id])) {
+      const speakerOnStage = speaker && speaker !== id && isInHall(players[speaker]);
+      return new Set(speakerOnStage ? [speaker] : []);
+    }
+    return new Set([...symmetricPeers(id)].filter((pid) => !isInHall(players[pid])));
+  };
+
+  // Audience in the hall may not publish (server-enforced via LiveKit permissions)
+  const shouldPublish = (id) =>
+    !(getAnnouncementState().live && isInHall(players[id]) && id !== liveSpeakerSocket());
+
+  const reconcilePublish = async (id) => {
+    const p = players[id];
+    // canPublish is undefined until the player has a LiveKit token
+    if (!p || p.canPublish === undefined || p.publishUpdating) return;
+    const desired = shouldPublish(id);
+    if (p.canPublish === desired) return;
+
+    p.publishUpdating = true;
+    const applied = await setProximityCanPublish(id, desired);
+    p.publishUpdating = false;
+    if (applied && players[id]) {
+      players[id].canPublish = desired;
+      io.to(id).emit("hallMute", { muted: !desired });
+    }
+  };
+
+  const refreshAllProximity = () => {
+    Object.keys(players).forEach((id) => {
+      emitProximity(id);
+      reconcilePublish(id);
+    });
+  };
+
+  onLiveAnnouncementChange(() => refreshAllProximity());
+  // Retries permission updates that failed (e.g. participant was still connecting)
+  setInterval(() => {
+    if (getAnnouncementState().live || Object.values(players).some((p) => p.canPublish === false)) {
+      Object.keys(players).forEach((id) => reconcilePublish(id));
+    }
+  }, 5000);
+
+  const emitProximity = (id, force = false) => {
+    if (!players[id]) return;
+
+    const peers = peersFor(id);
     const list = [...peers].filter((pid) => players[pid]).sort();
     const key = list.join(",");
     if (!force && lastProximityKey[id] === key) return;
@@ -119,6 +184,9 @@ export default (io) => {
           roomAccess: ROOM_ACCESS_LEVELS
         });
 
+        // Announcement Hall: live / upcoming announcements (stage is built client-side)
+        socket.emit("announcementState", getAnnouncementState());
+
         if (!existingPlayer) {
           // Announce to others only if they weren't already in the game
           socket.broadcast.emit("playerJoined", {
@@ -138,9 +206,15 @@ export default (io) => {
 
       // minimal shape validation
       const { x, y, anim } = data ?? {};
+      const wasInHall = isInHall(p);
       if (typeof x === "number") p.x = x;
       if (typeof y === "number") p.y = y;
       if (typeof anim === "string") p.anim = anim;
+
+      // Entering/leaving the hall during a live announcement changes who hears whom
+      if (wasInHall !== isInHall(p) && getAnnouncementState().live) {
+        refreshAllProximity();
+      }
 
       socket.broadcast.emit("playerMoved", {
         id: socket.id,
@@ -183,7 +257,9 @@ export default (io) => {
       if (!p) return ack({ error: "NOT_JOINED" });
 
       try {
-        const token = await createProximityToken(socket.id, p.username);
+        const canPublish = shouldPublish(socket.id);
+        const token = await createProximityToken(socket.id, p.username, { canPublish });
+        p.canPublish = canPublish;
         console.log(`🎧 LiveKit SFU token issued: ${p.username} (${socket.id}) -> room "${PROXIMITY_ROOM}"`);
         ack({ token, url: getLivekitUrl(), roomName: PROXIMITY_ROOM });
       } catch (error) {

@@ -17,6 +17,8 @@ import ZoomControls from "../components/ZoomControls"; // Import
 import Minimap from "../components/Minimap"; // Import
 import MeetingModal from "../components/MeetingModal"; // Import meeting modal
 import ComputerModal from "../components/ComputerModal"; // Import computer modal
+import NoticeBoardModal from "../components/NoticeBoardModal"; // Team notice board (desk area)
+import AnnouncementCenter from "../components/AnnouncementCenter"; // Announcement Hall banner + reminders
 import FPSCounter from "../components/FPSCounter"; // Import FPS Counter
 import { NotificationDisplay } from "../context/NotificationContext"; // Import Notifications
 
@@ -72,6 +74,12 @@ function Metaverse() {
 
                 {/* Computer UI Modal */}
                 <ComputerModal />
+
+                {/* Team Notice Board Modal */}
+                <NoticeBoardModal />
+
+                {/* Announcement Hall: live banner, reminders, stage state */}
+                <AnnouncementCenter />
 
                 {/* 4. Pass the state and setter down to the controls */}
                 <VoiceChat

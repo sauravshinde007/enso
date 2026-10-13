@@ -552,6 +552,23 @@
          "name":"Interactables",
          "objects":[
                 {
+                 "height":18,
+                 "id":64,
+                 "name":"noticeboard",
+                 "properties":[
+                        {
+                         "name":"type",
+                         "type":"string",
+                         "value":"noticeboard"
+                        }],
+                 "rotation":0,
+                 "type":"",
+                 "visible":true,
+                 "width":104,
+                 "x":1116,
+                 "y":398
+                }, 
+                {
                  "height":40.3333333333334,
                  "id":13,
                  "name":"",
@@ -1528,7 +1545,7 @@
          "y":0
         }],
  "nextlayerid":15,
- "nextobjectid":64,
+ "nextobjectid":65,
  "orientation":"orthogonal",
  "renderorder":"right-down",
  "tiledversion":"1.11.2",

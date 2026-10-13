@@ -59,3 +59,17 @@ The project is built on a Client-Server model, divided into three primary layers
 - **SFU media:** `proximityService` joins the LiveKit room (token via the `getProximityToken` socket ack, identity = socket id) with `autoSubscribe: false`, publishes mic/camera, and subscribes/unsubscribes to remote tracks as the proximity set changes (with a 1s leave grace period).
 - **Dynamic Volume:** As players move closer or further apart, `VoiceManager` dynamically adjusts the volume of the respective HTML Audio elements.
 
+
+### 3. Team Notice Board & Issue Bot
+- **Map:** A cork board on the desk-area wall (Tiled object `type: noticeboard` in `map2.tmj`, drawn by `MapManager.drawNoticeBoard`). Pressing E opens `NoticeBoardModal`.
+- **Teams (`Team` model):** An admin creates a team and picks its leader. The leader (or an admin) manages members, the GitHub repo URL, an optional GitHub token, the low-priority labels, and the bot's AI provider + API key. A user can belong to several teams. Tokens/keys are AES-256-GCM encrypted (`utils/secrets.js`) and never returned to clients.
+- **Notices:** `GET /api/teams/notices` returns open issues and PRs for every team the user belongs to (GitHub REST, cached 60s per repo). The client shows them as a sliding card carousel filterable by team and type.
+- **Issue bot:** For open issues carrying a low-priority label, the leader clicks *Assign to bot*. `issueBotService` (one task at a time) reads the issue, lets the chosen model (Claude / OpenAI / Gemini / Groq via `llmService`) pick files, generates full-file changes, commits them to an `ai-bot/issue-<n>-…` branch through the git data API, opens a PR (`Closes #n`) and comments on the issue. Progress is stored in `BotTask` and pushed to team members via the `noticeBoardUpdate` socket event. The bot never merges.
+- **Optional env:** `GITHUB_TOKEN` (fallback token), `SECRETS_ENCRYPTION_KEY` (defaults to `JWT_SECRET`), and `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `GEMINI_API_KEY` / `GROQ_API_KEY` as fallback bot keys for testing.
+
+### 4. Announcement Hall
+- **Space:** The open hall on the right of the map (`x 1376–2016, y 416–960`, `config/announcementHall.js` on both client and server). A permanent "Announcement Hall" plaque marks it.
+- **Scheduling:** Admin Panel → *Announcements* tab allots a time slot (title, speaker, start, duration). Overlapping slots are rejected (one hall). `Announcement` model; routes under `/api/announcements`.
+- **Notifications:** On declaration, 10 minutes before start, when it goes live, and on cancel, every user gets a stored `Notification` (type `announcement`) plus a real-time toast (`announcementNotice`).
+- **Stage:** As soon as a slot is declared the client (`StageManager`) builds a stage (banner, platform, podium, speakers, audience mats) with a construction animation; while live it adds spotlights and an ON AIR sign; it is removed when nothing is scheduled.
+- **Audio rules while live** (`socketHandler` + `announcementService` tick every 10s): everyone inside the hall is subscribed only to the speaker (heard at full volume anywhere in the hall), the speaker hears no one, and people outside the hall never connect to people inside. The audience's LiveKit `canPublish` permission is revoked server-side (RoomServiceClient) so they cannot speak, and restored when they leave the hall or the slot ends.

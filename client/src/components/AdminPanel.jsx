@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import axios from "axios";
 import { useAuth } from "../context/AuthContext";
 import { X, Shield, ShieldCheck, User as UserIcon } from "lucide-react";
+import AnnouncementScheduler from "./AnnouncementScheduler";
 
 const ROLES = ['employee', 'admin', 'hr', 'ceo'];
 
@@ -11,6 +12,7 @@ export default function AdminPanel({ isOpen, onClose }) {
     const [computers, setComputers] = useState([]); // All computer IDs
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);
+    const [tab, setTab] = useState("users"); // users | announcements
 
     useEffect(() => {
         if (isOpen && user?.role === 'admin') {
@@ -130,9 +132,21 @@ export default function AdminPanel({ isOpen, onClose }) {
                     </button>
                 </div>
 
+                {/* Tabs */}
+                <div className="flex gap-1 px-4 pt-3 border-b border-[#333] bg-[#111]">
+                    {[["users", "Users & Desks"], ["announcements", "Announcements"]].map(([id, label]) => (
+                        <button key={id} onClick={() => setTab(id)}
+                            className={`px-3 py-2 text-sm rounded-t-md transition-colors ${tab === id ? "bg-[#1a1a1a] text-white border border-b-0 border-[#333]" : "text-gray-500 hover:text-gray-300"}`}>
+                            {label}
+                        </button>
+                    ))}
+                </div>
+
                 {/* Content */}
                 <div className="p-6 overflow-y-auto flex-1">
-                    {loading ? (
+                    {tab === "announcements" ? (
+                        <AnnouncementScheduler users={users} token={token} />
+                    ) : loading ? (
                         <div className="text-center text-gray-400 py-8">Loading users...</div>
                     ) : error ? (
                         <div className="text-center text-red-400 py-8">{error}</div>

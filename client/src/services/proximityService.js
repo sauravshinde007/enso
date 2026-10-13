@@ -117,6 +117,10 @@ class ProximityService {
       .on(RoomEvent.ParticipantDisconnected, (participant) => {
         this._dropRemote(participant.identity);
       })
+      // Announcement Hall: the server revokes/restores publishing for the audience
+      .on(RoomEvent.ParticipantPermissionsChanged, (_prev, participant) => {
+        if (participant === room.localParticipant || !participant) this._queueSync();
+      })
       .on(RoomEvent.Reconnected, () => {
         room.remoteParticipants.forEach(p => this._applySubscription(p));
         this._queueSync();
@@ -249,6 +253,14 @@ class ProximityService {
     const room = this.room;
     if (!room || room.state !== 'connected') return;
     const lp = room.localParticipant;
+
+    // Muted by the server (live announcement audience): nothing may be published
+    if (lp.permissions && lp.permissions.canPublish === false) {
+      for (const pub of [...lp.trackPublications.values()]) {
+        if (pub.track) await lp.unpublishTrack(pub.track, false).catch(() => {});
+      }
+      return;
+    }
 
     const wanted = [
       ['audio', Track.Source.Microphone],

@@ -299,6 +299,55 @@ export default class MapManager {
         } else {
             console.log("ℹ️ No 'Interactables' layer found in map.");
         }
+
+        this.interactables
+            .filter((item) => item.type === "noticeboard")
+            .forEach((item) => this.drawNoticeBoard(item));
+    }
+
+    /**
+     * Wall-mounted cork board. The Tiled object is the strip of floor in front of the board
+     * (so the player can reach it); the board itself is drawn on the wall just above.
+     */
+    drawNoticeBoard(item) {
+        const w = item.width;
+        const h = 62;
+        const x = item.x;
+        const y = item.y + item.height - h - 8;
+        const g = this.scene.add.graphics().setDepth(2);
+
+        // Shadow, wooden frame, cork
+        g.fillStyle(0x000000, 0.25).fillRect(x + 3, y + 4, w, h);
+        g.fillStyle(0x5b3a1e, 1).fillRect(x, y, w, h);
+        g.fillStyle(0x7a4f2a, 1).fillRect(x + 2, y + 2, w - 4, h - 4);
+        g.fillStyle(0xc89660, 1).fillRect(x + 5, y + 14, w - 10, h - 19);
+
+        // Header plate
+        g.fillStyle(0x2b2f3a, 1).fillRect(x + 5, y + 4, w - 10, 9);
+
+        // Pinned notes (issue / PR cards)
+        const notes = [
+            { dx: 9, dy: 18, nw: 20, nh: 18, color: 0xfff3a3 },
+            { dx: 33, dy: 20, nw: 18, nh: 22, color: 0xa7f3d0 },
+            { dx: 55, dy: 17, nw: 20, nh: 17, color: 0xbfdbfe },
+            { dx: 79, dy: 21, nw: 17, nh: 20, color: 0xfbcfe8 },
+            { dx: 14, dy: 40, nw: 24, nh: 13, color: 0xc7d2fe },
+            { dx: 58, dy: 38, nw: 22, nh: 15, color: 0xfff3a3 },
+        ];
+        notes.forEach(({ dx, dy, nw, nh, color }) => {
+            if (dx + nw > w - 6) return;
+            g.fillStyle(0x000000, 0.18).fillRect(x + dx + 1, y + dy + 1, nw, nh);
+            g.fillStyle(color, 1).fillRect(x + dx, y + dy, nw, nh);
+            g.fillStyle(0x6b7280, 0.6);
+            for (let ly = 5; ly < nh - 2; ly += 4) g.fillRect(x + dx + 3, y + dy + ly, nw - 6, 1);
+            g.fillStyle(0xdc2626, 1).fillCircle(x + dx + nw / 2, y + dy + 1, 1.8);
+        });
+
+        this.scene.add.text(x + w / 2, y + 8.5, "TEAM BOARD", {
+            fontFamily: "monospace",
+            fontSize: "7px",
+            color: "#e5e7eb",
+        }).setOrigin(0.5).setDepth(2).setResolution(3);
     }
 
     getNearestInteractable(x, y, maxDistance = 50) {

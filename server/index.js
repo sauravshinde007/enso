@@ -23,6 +23,10 @@ import configurePassport from './config/passport.js';
 import User from './models/User.js'; // Import statically
 import { syncUsersBatch } from "./services/streamService.js";
 import meetingRoutes from "./routes/meetingRoutes.js";
+import teamRoutes from "./routes/teamRoutes.js";
+import announcementRoutes from "./routes/announcementRoutes.js";
+import { initAnnouncements, runAnnouncementTick } from "./services/announcementService.js";
+import { initIssueBot, recoverStaleBotTasks } from "./services/issueBotService.js";
 import "./services/momWorker.js"; // Initialize MOM Worker
 
 const app = express();
@@ -63,6 +67,12 @@ mongoose
   .then(async () => {
     console.log("✅ MongoDB connected");
 
+    // Bot tasks interrupted by a restart can never finish
+    recoverStaleBotTasks().catch((err) => console.error("Failed to recover bot tasks:", err));
+
+    // Announcement Hall: catch up on slots that started/ended while the server was down
+    runAnnouncementTick();
+
     // --- SYNC USERS TO STREAM CHAT ON STARTUP ---
     try {
       const users = await User.find({});
@@ -78,13 +88,20 @@ mongoose
 
 // --- Socket.IO ---
 const io = new Server(server, { cors: { origin: "*" } });
+/*Express allows you to store global settings/objects directly on the app instance using app.set(key, value).
+
+By running app.set("io", io), you are telling Express: "Save this WebSocket instance under the name 'io' so anyone can access it later */
 app.set("io", io);
+initIssueBot(io);
+initAnnouncements(io);
 
 // --- API Routes ---
 app.use("/api/auth", authRoutes);        // Authentication routes (signup/login)
 app.use("/api/stream", streamRoutes);    // Stream Chat related routes
 app.use("/api/users", userRoutes);       // Users routes
 app.use("/api/meeting", meetingRoutes);  // Meeting routes
+app.use("/api/teams", teamRoutes);        // Teams + notice board + issue bot
+app.use("/api/announcements", announcementRoutes); // Announcement Hall schedule
 
 // --- Socket.IO Connection Handling ---
 socketHandler(io);

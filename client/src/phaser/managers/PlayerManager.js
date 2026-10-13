@@ -56,6 +56,21 @@ export default class PlayerManager {
             console.log("🖥️ Computer interaction closed");
         });
 
+        window.addEventListener("close-noticeboard", () => {
+            this.isUsingComputer = false; // reuse the "frozen while in a UI" flag
+        });
+
+        // Teleport to an exact point (e.g. speaker -> stage)
+        window.addEventListener("teleport-to-point", (e) => {
+            if (!this.player) return;
+            const { x, y } = e.detail;
+            this.scene.tweens.killTweensOf(this.player);
+            this.player.x = x;
+            this.player.y = y;
+            this.currentAnimation = "idle-down";
+            this.player.anims.play(this.currentAnimation, true);
+        });
+
         // Teleport Event Listener
         window.addEventListener("teleport-player", (e) => {
             if (!this.player) return;
@@ -409,7 +424,17 @@ export default class PlayerManager {
                 }
             }
 
-            // 2. Computers -> Trigger Computer UI
+            // 2. Notice board -> Team notice board UI
+            else if (interactable.type === 'noticeboard') {
+                this.currentAnimation = 'idle-up';
+                this.lastDirection = 'up';
+                this.player.anims.play(this.currentAnimation, true);
+                this.player.body.setVelocity(0);
+                this.isUsingComputer = true;
+                window.dispatchEvent(new CustomEvent('open-noticeboard'));
+            }
+
+            // 3. Computers -> Trigger Computer UI
             else if (interactable.type === 'computer') {
                 console.log("🖥️ Computer interaction triggered");
 
@@ -643,7 +668,13 @@ export default class PlayerManager {
 
             // Position above player (or object?)
             // Let's position it above the object to attract attention
-            this.interactionText.setPosition(interactable.x + interactable.width / 2, interactable.y - 20);
+            // (the wall-mounted notice board is above its hit area, so put that prompt below instead)
+            const isNoticeBoard = interactable.type === 'noticeboard';
+            this.interactionText.setText(isNoticeBoard ? "Press E to open Notice Board" : "Press E to Interact");
+            this.interactionText.setPosition(
+                interactable.x + interactable.width / 2,
+                isNoticeBoard ? interactable.y + interactable.height + 18 : interactable.y - 20
+            );
             this.interactionText.setVisible(true);
             this.currentInteractable = interactable;
         } else {
